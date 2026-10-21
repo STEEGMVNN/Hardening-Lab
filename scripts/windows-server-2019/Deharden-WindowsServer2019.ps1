@@ -46,8 +46,9 @@ New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 
 # Low-privilege demo user (the target in the exercises) and weak passwords
 $DemoUser = 'trainee'
-$DemoPass = 'Spring2026!'   # weak / predictable, useful for password spraying
-$WeakPass = 'P@ssw0rd'
+$DemoPass = 'Password1'     # weak AND present in rockyou.txt: crackable offline (hashcat)
+                            # and predictable enough for password spraying. A hardened
+                            # policy (min length 14 + complexity) would reject it.
 
 function Log  ($m){ $line="[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $m; $line | Tee-Object -FilePath $Log -Append | Out-Null; Write-Host $line }
 function Step ($m){ Write-Host ""; Write-Host "===== $m =====" -ForegroundColor Yellow; "===== $m =====" | Out-File $Log -Append }

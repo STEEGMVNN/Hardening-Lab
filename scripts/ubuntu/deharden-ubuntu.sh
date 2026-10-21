@@ -182,6 +182,14 @@ if [[ -f "$CP" ]]; then
   ok "common-password: pam_unix using md5"
 fi
 
+# IMPORTANT: re-set the demo passwords now that MD5 is active, so the hashes
+# stored in /etc/shadow are MD5 ($1$...). The passwords set in step 2 were
+# hashed with the system default (yescrypt/SHA-512); without this re-hash the
+# 'john --format=md5crypt' / 'hashcat -m 500' demo would not match.
+echo "${DEMO_USER}:${DEMO_PASS}" | chpasswd -c MD5 2>/dev/null || echo "${DEMO_USER}:${DEMO_PASS}" | chpasswd
+echo "root:${ROOT_PASS}"         | chpasswd -c MD5 2>/dev/null || echo "root:${ROOT_PASS}"         | chpasswd
+ok "demo passwords re-hashed as MD5 (\$1\$) in /etc/shadow (crackable with john/hashcat -m 500)"
+
 #==============================================================================
 # 4) ASLR disabled
 #==============================================================================

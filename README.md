@@ -47,11 +47,18 @@ and you watch the consequence disappear. That's hardening you actually remember.
 
 ## How each guide is organized
 
-Every guide uses the same three-column table so the cause-and-effect is always explicit:
+Every weakness follows the same four-part, fully reproducible pattern so the cause-and-effect is
+always explicit — and so you can actually *run* each exercise end to end:
 
-| # | 🔴 Weakness introduced | 🟠 How it's exploited | 🟢 How to harden |
-| --- | --- | --- | --- |
-| … | what the script changed | the attacker's command / technique | the command that fixes it |
+- 🧪 **Seeded by the script** — the exact artifact you can test (a user, a file mode, a policy).
+- 🟠 **Exploit** — concrete attacker commands *and the result you should see* (e.g. the full
+  "dump the hashes → crack them with `hashcat`" chain for the weak-password lesson).
+- 🟢 **Harden** — the command that fixes it.
+- ✅ **Re-test** — run the same attack again and confirm it now fails.
+
+The scripts deliberately seed real, testable targets (weak accounts whose passwords are in common
+wordlists, world-readable hashes, SUID binaries, open services), so the exploit steps aren't
+hypothetical — they succeed on a freshly dehardened VM and stop succeeding once you harden it.
 
 Each system guide also explains **how to run its script** and where backups and logs are written,
 so you can always undo a change by hand if you prefer not to restore the snapshot.

@@ -1,0 +1,244 @@
+#Requires -Version 5.1
+<#
+===============================================================================
+  UD05 · Bastionado de servidores — SCRIPT DE DESBASTIONADO (Windows Server 2019)
+  Máster en Ciberseguridad · U-TAD · Material docente de laboratorio
+-------------------------------------------------------------------------------
+  QUÉ HACE: deja un Windows Server 2019 DELIBERADAMENTE INSEGURO, deshaciendo
+  los controles de bastionado de la UD05, para que en clase se vaya
+  rebastionando paso a paso. Es el equivalente del script de Ubuntu: introduce
+  los mismos tipos de debilidad (cuentas, políticas, firewall, servicios,
+  auditoría, protocolos heredados) adaptados a Windows.
+ 
+  ADVERTENCIA: USO EXCLUSIVO EN LA VM DE LABORATORIO AISLADA (red Host-Only) Y
+  CON SNAPSHOT DE INSTALACIÓN FRESCA. No ejecutar nunca en un equipo real ni en
+  una red de produccion. Para volver al estado seguro: restaura la snapshot.
+ 
+  USO (PowerShell como Administrador):
+      Set-ExecutionPolicy -Scope Process Bypass -Force
+      .\Desbastionar-WindowsServer2019.ps1 [-Force]
+          -Force   no pedir confirmacion (modo desatendido)
+ 
+  Copias de seguridad (export de secpol y del registro) en:
+      C:\desbastionado-backups-<fecha>
+  Registro de lo realizado en:
+      C:\desbastionado-ud5.log
+===============================================================================
+#>
+ 
+[CmdletBinding()]
+param([switch]$Force)
+ 
+$ErrorActionPreference = 'Continue'
+ 
+# --- requiere Administrador ---
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Este script debe ejecutarse como Administrador." -ForegroundColor Red
+    exit 1
+}
+ 
+$ts        = Get-Date -Format 'yyyyMMdd-HHmmss'
+$BackupDir = "C:\desbastionado-backups-$ts"
+$Log       = "C:\desbastionado-ud5.log"
+New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
+ 
+# Usuario de demostracion de bajo privilegio (objetivo en clase) y contrasenas debiles
+$DemoUser = 'becario'
+$DemoPass = 'Primavera2026!'   # debil/predecible, sirve para spraying
+$WeakPass = 'P@ssw0rd'
+ 
+function Log  ($m){ $line="[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $m; $line | Tee-Object -FilePath $Log -Append | Out-Null; Write-Host $line }
+function Step ($m){ Write-Host ""; Write-Host "===== $m =====" -ForegroundColor Yellow; "===== $m =====" | Out-File $Log -Append }
+function OK   ($m){ Write-Host "   [hecho] $m" -ForegroundColor Green; "   [hecho] $m" | Out-File $Log -Append }
+function WarnMsg ($m){ Write-Host "   [aviso] $m" -ForegroundColor Red;  "   [aviso] $m" | Out-File $Log -Append }
+ 
+function Set-Reg($Path,$Name,$Value,$Type='DWord'){
+    if(-not (Test-Path $Path)){ New-Item -Path $Path -Force | Out-Null }
+    New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+}
+ 
+# --- banner ---
+Write-Host ""
+Write-Host "################################################################################" -ForegroundColor Red
+Write-Host "#     UD05 · DESBASTIONADO de Windows Server 2019 (material de laboratorio)     #" -ForegroundColor Red
+Write-Host "#                                                                              #" -ForegroundColor Red
+Write-Host "#  Este script va a DEBILITAR la seguridad de ESTA maquina a proposito.         #" -ForegroundColor Red
+Write-Host "#  Ejecutalo SOLO en la VM de laboratorio aislada y con snapshot fresca.        #" -ForegroundColor Red
+Write-Host "#  Para recuperar el estado seguro: restaura la snapshot de la VM.              #" -ForegroundColor Red
+Write-Host "################################################################################" -ForegroundColor Red
+Write-Host ""
+ 
+if (-not $Force) {
+    $ans = Read-Host "Escribe 'DESBASTIONAR' para continuar"
+    if ($ans -ne 'DESBASTIONAR') { Write-Host "Cancelado."; exit 0 }
+}
+ 
+Log "=== Inicio del desbastionado UD05 (Windows Server 2019) $ts ==="
+Log "Copias de seguridad en: $BackupDir"
+ 
+#==============================================================================
+# 0) Copia de seguridad de la directiva de seguridad local
+#==============================================================================
+Step "0) Copia de seguridad de la directiva local"
+secedit /export /cfg "$BackupDir\secpol-ANTES.cfg" | Out-Null
+OK "secpol exportada a $BackupDir\secpol-ANTES.cfg"
+ 
+#==============================================================================
+# 1) Politica de contrasenas debil (longitud 0, sin complejidad, sin caducidad)
+#==============================================================================
+Step "1) Politica de contrasenas debil"
+net accounts /minpwlen:0 /maxpwage:unlimited /uniquepw:0 | Out-Null
+$cfg = "$env:TEMP\secpol-mod.cfg"
+secedit /export /cfg $cfg | Out-Null
+(Get-Content $cfg) `
+  -replace 'PasswordComplexity\s*=\s*\d', 'PasswordComplexity = 0' `
+  -replace 'MinimumPasswordLength\s*=\s*\d+', 'MinimumPasswordLength = 0' `
+  -replace 'MinimumPasswordAge\s*=\s*\d+', 'MinimumPasswordAge = 0' `
+  -replace 'ClearTextPassword\s*=\s*\d', 'ClearTextPassword = 0' |
+  Set-Content $cfg
+secedit /configure /db "$env:TEMP\secpol.sdb" /cfg $cfg /areas SECURITYPOLICY | Out-Null
+OK "complejidad desactivada, longitud minima 0, sin caducidad (demo: spraying/diccionario)"
+ 
+#==============================================================================
+# 2) Bloqueo de cuenta desactivado (spraying ilimitado)
+#==============================================================================
+Step "2) Bloqueo de cuenta desactivado"
+net accounts /lockoutthreshold:0 | Out-Null
+OK "umbral de bloqueo = 0 (las cuentas nunca se bloquean)"
+ 
+#==============================================================================
+# 3) Cuentas: invitado activo, contrasenas en blanco permitidas, usuario debil
+#==============================================================================
+Step "3) Cuentas debiles"
+# cuenta Invitado activa (nombre segun idioma del SO)
+$guest = Get-LocalUser | Where-Object { $_.SID -like 'S-1-5-21-*-501' }
+if ($guest) { Enable-LocalUser -Name $guest.Name; OK "cuenta Invitado '$($guest.Name)' activada" }
+# permitir uso de cuentas con contrasena en blanco desde la red
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'LimitBlankPasswordUse' 0
+OK "LimitBlankPasswordUse = 0 (cuentas con contrasena en blanco utilizables en red)"
+# usuario de demostracion de bajo privilegio con contrasena debil
+if (-not (Get-LocalUser -Name $DemoUser -ErrorAction SilentlyContinue)) {
+    $sec = ConvertTo-SecureString $DemoPass -AsPlainText -Force
+    New-LocalUser -Name $DemoUser -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
+    Add-LocalGroupMember -Group 'Users' -Member $DemoUser -ErrorAction SilentlyContinue
+    OK "usuario '$DemoUser' con contrasena debil '$DemoPass'"
+}
+# administrador local NO renombrado -> enumerable por RID 500 (se deja a proposito)
+OK "Administrador con nombre por defecto (enumerable por RID 500)"
+ 
+#==============================================================================
+# 4) Inicio de sesion interactivo: mostrar ultimo usuario, sin bloqueo, sin aviso
+#==============================================================================
+Step "4) Inicio de sesion interactivo debil"
+$sysPol = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+Set-Reg $sysPol 'DontDisplayLastUserName' 0
+Set-Reg $sysPol 'InactivityTimeoutSecs'   0
+Set-Reg $sysPol 'DisableCAD'              1
+Set-Reg $sysPol 'LegalNoticeCaption'      '' 'String'
+Set-Reg $sysPol 'LegalNoticeText'         '' 'String'
+OK "se muestra el ultimo usuario, sin bloqueo por inactividad, sin aviso legal"
+ 
+#==============================================================================
+# 5) UAC desactivado (elevacion silenciosa)
+#==============================================================================
+Step "5) UAC desactivado"
+Set-Reg $sysPol 'EnableLUA' 0
+Set-Reg $sysPol 'ConsentPromptBehaviorAdmin' 0
+Set-Reg $sysPol 'PromptOnSecureDesktop' 0
+OK "EnableLUA=0 y ConsentPromptBehaviorAdmin=0 (requiere reinicio; demo de bypass de UAC)"
+ 
+#==============================================================================
+# 6) RDP habilitado sin NLA (fuerza bruta / BlueKeep historico)
+#==============================================================================
+Step "6) RDP habilitado y sin NLA"
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' 'fDenyTSConnections' 0
+Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service -Name TermService -ErrorAction SilentlyContinue
+# desactivar Network Level Authentication
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' 'UserAuthentication' 0
+Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
+OK "RDP activo, NLA desactivado (demo: nmap rdp-ntlm-info / hydra rdp)"
+ 
+#==============================================================================
+# 7) Firewall de Windows Defender desactivado (todos los perfiles)
+#==============================================================================
+Step "7) Firewall desactivado"
+Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
+OK "firewall desactivado en los 3 perfiles (demo: nmap -p- descubre todos los servicios)"
+ 
+#==============================================================================
+# 8) Auditoria avanzada desactivada (sin rastro para el SOC)
+#==============================================================================
+Step "8) Auditoria desactivada"
+auditpol /set /category:* /success:disable /failure:disable | Out-Null
+# quitar la linea de comandos del evento 4688
+Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' 'ProcessCreationIncludeCmdLine_Enabled' 0
+OK "todas las subcategorias de auditoria en 'sin auditar'; 4688 sin linea de comandos"
+ 
+#==============================================================================
+# 9) SMBv1 activo, ScriptBlock logging off, autorun on
+#==============================================================================
+Step "9) SMBv1, ScriptBlock logging y autorun"
+# habilitar SMBv1 (protocolo heredado; en 2019 esta parcheado -> se trata como deteccion con nmap)
+Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue | Out-Null
+Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force -ErrorAction SilentlyContinue
+OK "SMBv1 habilitado (demo: nmap --script smb-vuln-ms17-010 -> deteccion; no es RCE en 2019 parcheado)"
+# desactivar ScriptBlock logging de PowerShell
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' 'EnableScriptBlockLogging' 0
+OK "ScriptBlock logging desactivado (PowerShell ofuscado pasa desapercibido)"
+# autorun/autoplay activado
+Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' 'NoDriveTypeAutoRun' 0
+OK "autorun activado (USB malicioso autoejecutable)"
+ 
+#==============================================================================
+# 10) Windows Update: sin actualizaciones automaticas
+#==============================================================================
+Step "10) Actualizaciones automaticas desactivadas"
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' 'NoAutoUpdate' 1
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' 'AUOptions' 1
+OK "NoAutoUpdate=1 (el servidor no instala parches -> exploits publicos vigentes)"
+ 
+#==============================================================================
+# 11) Windows Defender (antivirus) desactivado
+#==============================================================================
+Step "11) Windows Defender desactivado"
+try {
+    Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+    Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+    OK "proteccion en tiempo real de Defender desactivada"
+} catch {
+    WarnMsg "no se pudo desactivar Defender por comando (la Proteccion contra Manipulaciones/Tamper Protection lo impide)."
+    WarnMsg "Desactiva primero 'Proteccion contra manipulaciones' en Seguridad de Windows y vuelve a ejecutar, o hazlo por GPO."
+}
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' 'DisableAntiSpyware' 1
+OK "politica DisableAntiSpyware=1 aplicada (efecto completo tras reiniciar)"
+ 
+#==============================================================================
+# RESUMEN
+#==============================================================================
+Step "RESUMEN"
+@"
+ 
+   El sistema ha quedado DESBASTIONADO. Debilidades introducidas:
+     1. Politica de contrasenas: sin complejidad, longitud 0, sin caducidad
+     2. Bloqueo de cuenta desactivado (spraying ilimitado)
+     3. Invitado activo, contrasenas en blanco permitidas, '$DemoUser'/'$DemoPass'
+     4. Login: muestra ultimo usuario, sin bloqueo por inactividad, sin aviso legal
+     5. UAC desactivado
+     6. RDP activo y sin NLA
+     7. Firewall desactivado (3 perfiles)
+     8. Auditoria desactivada (sin 4625/4688/4740)
+     9. SMBv1 activo, ScriptBlock logging off, autorun on
+    10. Windows Update sin actualizaciones automaticas
+    11. Windows Defender desactivado (si la Tamper Protection lo permite)
+ 
+   Copias de seguridad: $BackupDir (secpol-ANTES.cfg)
+   Registro:            $Log
+ 
+   En clase: id la maquina, lanzad las demos desde Kali y rebastionad siguiendo
+   la guia. Entre pruebas, restaurad la snapshot fresca de la VM.
+   ALGUNOS CAMBIOS (UAC, Defender, SMBv1) REQUIEREN REINICIO: Restart-Computer
+"@ | Tee-Object -FilePath $Log -Append | Write-Host
+ 
+Log "=== Fin del desbastionado UD05 (Windows Server 2019) ==="

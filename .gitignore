@@ -1,0 +1,13 @@
+# Logs and backups produced by the dehardening scripts (never commit these)
+deharden-backups-*/
+*.log
+secpol-*.cfg
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.vscode/
+.idea/

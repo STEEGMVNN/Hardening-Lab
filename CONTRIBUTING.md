@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in improving **Servers-Hardening**! This is an open-source learning lab, and
+Thanks for your interest in improving **Hardening-Lab**! This is an open-source learning lab, and
 contributions that make the exercises clearer, safer, or broader are very welcome.
 
 ## Ground rules

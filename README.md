@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ Servers-Hardening
+# 🛡️ Hardening Lab
 
 **A hands-on, open-source lab for learning system hardening by breaking it first.**
 
@@ -60,8 +60,8 @@ so you can always undo a change by hand if you prefer not to restore the snapsho
 
 ```bash
 # 1. Clone the project
-git clone https://github.com/STEEGMVNN/Servers-Hardening.git
-cd Servers-Hardening
+git clone https://github.com/STEEGMVNN/Hardening-Lab.git
+cd Hardening-Lab
 ```
 
 Then follow the guide for your target system:
@@ -75,7 +75,7 @@ recommended topology (an attacker box plus the victim VMs), the Host-Only networ
 ## Repository layout
 
 ```
-Servers-Hardening/
+Hardening-Lab/
 ├── README.md                     ← you are here
 ├── LICENSE                       ← MIT
 ├── CONTRIBUTING.md               ← how to add a system or improve a guide

@@ -200,14 +200,37 @@ OK "all audit subcategories set to 'no auditing'; 4688 without command line"
 # 9) SMBv1 enabled, ScriptBlock logging off, autorun on
 #==============================================================================
 Step "9) SMBv1, ScriptBlock logging and autorun"
-# Enable the SMBv1 *server* protocol via the fast config + registry path only.
-# We deliberately AVOID 'Enable-WindowsOptionalFeature ... SMB1Protocol': on an isolated
-# VM (no internet) it makes DISM reach out to Windows Update for the feature payload and
-# can appear to hang for many minutes. Toggling the server protocol is instant and is
-# enough for nmap smb-protocols / smb-vuln-ms17-010 detection.
+# Enable the SMBv1 SERVER. On Windows Server 2019 the server only offers SMBv1 when the
+# optional feature 'SMB1Protocol-Server' is installed -- Set-SmbServerConfiguration /
+# registry alone is NOT enough. But 'Enable-WindowsOptionalFeature' makes DISM reach out
+# to Windows Update when the feature payload was removed, which hangs on an offline VM.
+# So we run it inside a TIME-BOXED job: it completes fast when the payload is on disk, and
+# we bail out with guidance instead of hanging when it isn't. A REBOOT is then required
+# before nmap shows the SMBv1 (NT LM 0.12) dialect.
 Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force -ErrorAction SilentlyContinue
 Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1' 1
-OK "SMBv1 server enabled (demo: nmap --script smb-protocols / smb-vuln-ms17-010 detection)"
+$smb1state = (Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -ErrorAction SilentlyContinue).State
+if ($smb1state -eq 'Enabled') {
+    OK "SMBv1 server feature already enabled (reboot if nmap still only shows SMB2/3)"
+} else {
+    Log "Enabling SMB1Protocol-Server feature (time-boxed to 180s)..."
+    $job = Start-Job { Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -All -NoRestart -ErrorAction SilentlyContinue }
+    if (Wait-Job $job -Timeout 180) {
+        Receive-Job $job -ErrorAction SilentlyContinue | Out-Null
+        $smb1state = (Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -ErrorAction SilentlyContinue).State
+        if ($smb1state -match 'Enable') {
+            OK "SMBv1 server feature enabled -> REBOOT required before nmap shows the SMBv1 dialect"
+        } else {
+            WarnMsg "could not confirm the SMB1 feature state ($smb1state); a reboot + re-check may be needed"
+        }
+    } else {
+        Stop-Job $job -ErrorAction SilentlyContinue
+        WarnMsg "enabling the SMB1 feature timed out: its payload was likely removed on this offline VM."
+        WarnMsg "Fix: give the VM temporary internet and re-run, OR add it from the install ISO, e.g.:"
+        WarnMsg '  Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -All -Source wim:D:\sources\install.wim:1 -LimitAccess'
+    }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+}
 # disable PowerShell ScriptBlock logging
 Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' 'EnableScriptBlockLogging' 0
 OK "ScriptBlock logging disabled (obfuscated PowerShell goes unnoticed)"

@@ -176,18 +176,28 @@ and because it's in a wordlist, offline cracking is instant.
 - ✅ **Re-test:** the same failed logon now produces a 4625 event with full detail.
 
 ## 9. SMBv1 enabled, ScriptBlock logging off, autorun on
-- 🧪 **Seeded:** the SMBv1 **server** protocol enabled (fast config + registry toggle, no DISM so it
-  can't stall on an offline VM); PowerShell ScriptBlock logging off; autorun on.
-- 🟠 **Exploit:**
+- 🧪 **Seeded:** the **`SMB1Protocol-Server` optional feature** is enabled (so the server actually
+  offers SMBv1 — on Server 2019 the registry/`Set-SmbServerConfiguration` toggle alone is *not*
+  enough), plus ScriptBlock logging off and autorun on.
+  > **Two gotchas that bite here:**
+  > 1. **Reboot required.** The SMBv1 driver loads at boot, so `nmap` keeps showing only SMB2/3 until
+  >    you `Restart-Computer`. After the reboot, `smb-protocols` lists the `NT LM 0.12` dialect.
+  > 2. **Offline VM without the feature payload.** If `Get-WindowsOptionalFeature -Online
+  >    -FeatureName SMB1Protocol-Server` reports `DisabledWithPayloadRemoved`, the feature can't be
+  >    installed offline. Give the VM temporary internet (VirtualBox: switch to NAT, enable, revert to
+  >    Host-Only) **or** install from the ISO:
+  >    `Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -All -Source wim:D:\sources\install.wim:1 -LimitAccess`
+- 🟠 **Exploit (after the reboot):**
   ```bash
-  nmap --script smb-protocols -p445 $HOST           # => shows SMBv1 is offered
+  nmap --script smb-protocols -p445 $HOST           # => now lists "NT LM 0.12" (SMBv1)
   nmap --script smb-vuln-ms17-010 -p445 $HOST       # detection; "not vulnerable" on patched 2019
   ```
   On a patched 2019 this is a **detection** exercise, not an RCE — see the note below.
-- 🟢 **Harden:** `Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force` (fast; optionally
-  `Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart` to remove the feature
-  too); set `EnableScriptBlockLogging=1`; `NoDriveTypeAutoRun=255`.
-- ✅ **Re-test:** `nmap --script smb-protocols` no longer lists SMBv1.
+- 🟢 **Harden:** `Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force` and
+  `Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -NoRestart` (disabling is
+  fast — no DISM/Windows Update round-trip); set `EnableScriptBlockLogging=1`; `NoDriveTypeAutoRun=255`.
+  Reboot to unload the driver.
+- ✅ **Re-test:** after the reboot `nmap --script smb-protocols` no longer lists `NT LM 0.12`.
 
 ## 10. Windows Update with no automatic updates
 - 🧪 **Seeded:** `NoAutoUpdate=1` — the server never pulls patches.

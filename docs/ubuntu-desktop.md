@@ -25,9 +25,14 @@ sudo ./deharden-ubuntu.sh          # type DEHARDEN to confirm
 sudo reboot                        # so ASLR / AppArmor / services settle
 ```
 
+Flags: `-y` unattended · `--no-apt` skip all package installs · `--no-web` skip the DVWA web app
+(row 5) · `--no-ftp` skip building the ProFTPD server (row 8). DVWA and ProFTPD need internet and add
+a few minutes; use the flags on an offline or minimal VM.
+
 - **Backups:** `/root/deharden-backups-<date>/` · **Log:** `/var/log/deharden-lab.log`
 - **Demo accounts it creates:** `root / toor` and `trainee / 123456` — both are in `rockyou.txt`,
   so they are genuinely crackable, and their hashes are stored as **MD5 (`$1$…`)** on purpose.
+  It also creates `ftpuser / ftp123` for the FTP service (row 8).
 
 ## Attacker box prerequisites
 
@@ -99,16 +104,37 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
 - 🟢 **Harden:** `sysctl -w kernel.randomize_va_space=2` and persist it in `/etc/sysctl.conf`.
 - ✅ **Re-test:** the loop above now prints a **different** libc base each run.
 
-## 5. AppArmor disabled (processes unconfined)
-- 🧪 **Seeded:** the `apparmor` service is stopped and disabled; profiles set to `complain`.
+## 5. AppArmor disabled → exploit an unconfined web app (DVWA) to read `/etc/passwd`
+- 🧪 **Seeded:** the `apparmor` service is stopped/disabled (profiles in `complain`), **and** DVWA
+  (Damn Vulnerable Web Application) is installed at `http://<IP>/dvwa`, served by Apache/PHP with **no
+  AppArmor confinement**. Because nothing confines the web process, a web flaw can read any file the
+  Apache user can — including `/etc/passwd` (and `/etc/shadow`, made world-readable in row 6).
 - 🟠 **Exploit:**
+  1. Browse to `http://<IP>/dvwa`, log in as `admin / password`, click *Create / Reset Database*, then
+     set *DVWA Security* to **Low**.
+  2. Open the **Command Injection** page. The field runs `ping <input>`; chain a second command:
+     ```
+     127.0.0.1; cat /etc/passwd
+     ```
+     → the full `/etc/passwd` is returned in the page. Try `; cat /etc/shadow` too (readable thanks to
+     row 6). The **File Inclusion** page shows the same impact via `?page=/etc/passwd`.
+  3. First confirm nothing is confined: `sudo aa-status` → *"0 profiles are in enforce mode"*.
+- 🟢 **Harden:** turn AppArmor back on and confine Apache so the web process can't read secrets even
+  though Unix permissions allow it:
   ```bash
-  sudo aa-status        # => "0 profiles are in enforce mode" (nothing is confined)
+  systemctl enable --now apparmor
+  sudo cp scripts/ubuntu/apparmor/usr.sbin.apache2 /etc/apparmor.d/usr.sbin.apache2
+  sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.apache2
+  sudo aa-enforce /etc/apparmor.d/usr.sbin.apache2
+  sudo systemctl reload apache2
+  sudo aa-enforce /etc/apparmor.d/*     # enforce the rest of the system profiles too
   ```
-  A compromised confined service (e.g. a web app) is no longer boxed in, so it can read `/etc/shadow`
-  and pivot across the host.
-- 🟢 **Harden:** `systemctl enable --now apparmor`; `aa-enforce /etc/apparmor.d/*`.
-- ✅ **Re-test:** `sudo aa-status` now lists profiles in **enforce** mode.
+  > The shipped profile ([`scripts/ubuntu/apparmor/usr.sbin.apache2`](../scripts/ubuntu/apparmor/usr.sbin.apache2))
+  > is a starting point — Apache/PHP paths vary by Ubuntu release. If a legitimate page breaks under
+  > enforce, run `sudo aa-logprof` and let it add what the app really needs.
+- ✅ **Re-test:** repeat the `127.0.0.1; cat /etc/passwd` injection — it now returns nothing /
+  *Permission denied*, because AppArmor (MAC) denies the read; `sudo aa-status` lists Apache in
+  **enforce** mode. The web bug still exists, but its blast radius is contained.
 
 ## 6. `/etc/shadow` world-readable; SUID on `find` and `/tmp/rootbash`
 - 🧪 **Seeded:** `chmod 644 /etc/shadow`; SUID bit on `/usr/bin/find`; a SUID copy at `/tmp/rootbash`.
@@ -146,6 +172,31 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
   ```
 - 🟢 **Harden:** `apt purge -y telnetd`; `systemctl disable --now avahi-daemon cups`.
 - ✅ **Re-test:** `nmap -sV $IP` no longer shows 23/tcp; nothing listens on the removed services.
+
+## 8b. Outdated software: ProFTPD 1.3.3c (patch, don't just delete)
+- 🧪 **Seeded:** ProFTPD **1.3.3c** built from source and running on port 21 (login `ftpuser / ftp123`).
+  It's a 2010-era release with public exploits — the lesson is **patch management**, not deletion.
+- 🟠 **Exploit:**
+  ```bash
+  nmap -sV -p21 $IP                        # => 21/tcp open ftp  ProFTPD 1.3.3c
+  searchsploit proftpd 1.3.3               # => lists the public "ProFTPD 1.3.3c Backdoor" exploit
+  ```
+  The famous remote-root here is the **backdoor** (`HELP ACIDBITCHEZ`), used via
+  `msfconsole → use exploit/unix/ftp/proftpd_133c_backdoor`.
+  > ⚠️ That backdoor only existed in the **trojaned** 1.3.3c tarball distributed in late 2010. The
+  > default build uses the clean official source (so Metasploit will report the target as not
+  > exploitable). To reproduce the live RCE, re-run the script with
+  > `PROFTPD_SRC_URL=<url-to-backdoored-source> sudo ./deharden-ubuntu.sh`. Either way, the
+  > version-detection + patch loop below works and is the real takeaway.
+- 🟢 **Harden — update instead of removing:** replace the vulnerable build with the distro's current,
+  patched ProFTPD:
+  ```bash
+  sudo systemctl disable --now proftpd-lab
+  sudo apt-get install -y proftpd-core      # current, patched version from the repo
+  sudo systemctl enable --now proftpd
+  ```
+- ✅ **Re-test:** `nmap -sV -p21 $IP` now reports a **current** ProFTPD version, and the 1.3.3c
+  exploit no longer applies — the service stays available, but patched.
 
 ## 9. Firewall disabled
 - 🧪 **Seeded:** `ufw` disabled; `iptables` policies set to ACCEPT and flushed.

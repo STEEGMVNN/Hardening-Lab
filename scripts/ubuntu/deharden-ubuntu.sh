@@ -13,9 +13,11 @@
 #  FRESH-INSTALL SNAPSHOT. Never run this on a real machine or on a production
 #  network. To return to a safe state: restore the VM snapshot.
 #
-#  USAGE:  sudo ./deharden-ubuntu.sh [-y] [--no-apt]
+#  USAGE:  sudo ./deharden-ubuntu.sh [-y] [--no-apt] [--no-web] [--no-ftp]
 #            -y        do not ask for confirmation (unattended mode)
 #            --no-apt  do not try to install packages (telnetd, etc.) via apt
+#            --no-web  do not install the vulnerable web app (DVWA)
+#            --no-ftp  do not build the vulnerable FTP server (ProFTPD 1.3.3c)
 #
 #  Backups of every modified file go to: /root/deharden-backups-<date>
 #  A log of everything done goes to:      /var/log/deharden-lab.log
@@ -25,14 +27,26 @@ set -u
 #------------------------------- parameters -----------------------------------
 ASSUME_YES=0
 USE_APT=1
+INSTALL_WEB=1
+INSTALL_FTP=1
 for arg in "$@"; do
   case "$arg" in
     -y|--yes)   ASSUME_YES=1 ;;
     --no-apt)   USE_APT=0 ;;
+    --no-web)   INSTALL_WEB=0 ;;
+    --no-ftp)   INSTALL_FTP=0 ;;
     -h|--help)  grep '^#' "$0" | sed 's/^#//'; exit 0 ;;
     *) echo "Unknown argument: $arg"; exit 2 ;;
   esac
 done
+
+# ProFTPD source (configurable). The default is the official 1.3.3c release, which
+# nmap fingerprints as "ProFTPD 1.3.3c". The widely known *backdoor* RCE lived only
+# in the trojaned 1.3.3c tarball distributed in late 2010 (Metasploit module
+# exploit/unix/ftp/proftpd_133c_backdoor). To reproduce that live RCE in the lab,
+# point PROFTPD_SRC_URL at a copy of the backdoored source. See docs/ubuntu-desktop.md.
+PROFTPD_VERSION="1.3.3c"
+PROFTPD_SRC_URL="${PROFTPD_SRC_URL:-ftp://ftp.proftpd.org/historic/release/proftpd-1.3.3c.tar.gz}"
 
 #------------------------------- preliminaries --------------------------------
 if [[ $EUID -ne 0 ]]; then
@@ -202,12 +216,50 @@ sysctl -w kernel.randomize_va_space=0 >/dev/null && ok "kernel.randomize_va_spac
 #==============================================================================
 # 5) AppArmor disabled (profiles in complain mode / service stopped)
 #==============================================================================
-step "5) AppArmor disabled"
+step "5) AppArmor disabled + vulnerable web app (DVWA)"
 if command -v aa-complain >/dev/null 2>&1; then
   aa-complain /etc/apparmor.d/* >/dev/null 2>&1 && ok "AppArmor profiles set to 'complain' mode"
 fi
 systemctl stop apparmor   >/dev/null 2>&1 && ok "apparmor service stopped"
 systemctl disable apparmor >/dev/null 2>&1 && ok "apparmor service disabled at boot"
+
+# Install DVWA (Damn Vulnerable Web Application) so the impact of an UNCONFINED web
+# service is tangible: a command-injection / LFI flaw in DVWA can read /etc/passwd
+# (and /etc/shadow, made world-readable in step 6). With AppArmor enforcing an Apache
+# profile, that same read would be denied -- that is the control this step removes.
+if [[ $INSTALL_WEB -eq 1 && $USE_APT -eq 1 ]]; then
+  log "Installing DVWA stack (apache2, php, mariadb)..."
+  export DEBIAN_FRONTEND=noninteractive
+  if apt-get install -y -qq apache2 mariadb-server php php-mysqli php-gd libapache2-mod-php git >/dev/null 2>&1; then
+    systemctl enable --now mariadb >/dev/null 2>&1
+    systemctl enable --now apache2 >/dev/null 2>&1
+    DVWA_DIR=/var/www/html/dvwa
+    if [[ ! -d "$DVWA_DIR" ]]; then
+      git clone -q --depth 1 https://github.com/digininja/DVWA.git "$DVWA_DIR" 2>/dev/null || warn "could not clone DVWA (no internet?)"
+    fi
+    if [[ -d "$DVWA_DIR" ]]; then
+      # config: point DVWA at the local DB
+      cp "$DVWA_DIR/config/config.inc.php.dist" "$DVWA_DIR/config/config.inc.php" 2>/dev/null
+      sed -i "s/'db_user' ] *= *'[^']*'/'db_user' ]   = 'dvwa'/"      "$DVWA_DIR/config/config.inc.php" 2>/dev/null
+      sed -i "s/'db_password' ] *= *'[^']*'/'db_password' ] = 'p@ssw0rd'/" "$DVWA_DIR/config/config.inc.php" 2>/dev/null
+      chown -R www-data:www-data "$DVWA_DIR"
+      # database + app user
+      mysql -e "CREATE DATABASE IF NOT EXISTS dvwa; CREATE USER IF NOT EXISTS 'dvwa'@'localhost' IDENTIFIED BY 'p@ssw0rd'; GRANT ALL ON dvwa.* TO 'dvwa'@'localhost'; FLUSH PRIVILEGES;" 2>/dev/null \
+        && ok "DVWA database created"
+      # allow the classic command-injection / file-inclusion lessons out of the box
+      sed -i "s/allow_url_include *= *Off/allow_url_include = On/" /etc/php/*/apache2/php.ini 2>/dev/null
+      systemctl restart apache2 >/dev/null 2>&1
+      ok "DVWA installed at http://<IP>/dvwa  (login admin/password, set security to 'low')"
+      ok "web service runs UNCONFINED (no AppArmor): command injection can 'cat /etc/passwd'"
+    fi
+  else
+    warn "could not install the DVWA stack (no internet? use --no-web to skip)"
+  fi
+elif [[ $INSTALL_WEB -eq 0 ]]; then
+  warn "--no-web: DVWA not installed"
+else
+  warn "--no-apt: DVWA not installed"
+fi
 
 #==============================================================================
 # 6) Weak permissions on sensitive files and an exploitable SUID binary
@@ -246,7 +298,7 @@ fi
 #==============================================================================
 # 8) Unnecessary / cleartext services and ports (telnet, avahi, cups)
 #==============================================================================
-step "8) Unnecessary and cleartext services"
+step "8) Unnecessary / cleartext services and a vulnerable FTP server"
 if [[ $USE_APT -eq 1 ]]; then
   apt-get install -y -qq telnetd inetutils-inetd >/dev/null 2>&1 \
     && { systemctl enable --now inetutils-inetd >/dev/null 2>&1; ok "telnetd installed and active (cleartext credentials, demo with tcpdump/hydra)"; } \
@@ -256,6 +308,69 @@ else
 fi
 systemctl enable --now avahi-daemon >/dev/null 2>&1 && ok "avahi-daemon active (unnecessary service)"
 systemctl enable --now cups         >/dev/null 2>&1 && ok "cups active (unnecessary service)"
+
+# --- ProFTPD 1.3.3c: a legacy FTP server with a public exploit, built from source ---
+# Not in apt (too old), so we compile it. This teaches the full outdated-software loop:
+#   nmap -sV -> "ProFTPD 1.3.3c"  ->  searchsploit/msfconsole  ->  UPDATE (not delete) -> re-test
+# The famous backdoor RCE needs the trojaned tarball (set PROFTPD_SRC_URL); see the guide.
+if [[ $INSTALL_FTP -eq 1 && $USE_APT -eq 1 ]]; then
+  log "Building ProFTPD ${PROFTPD_VERSION} from source (this can take a few minutes)..."
+  apt-get install -y -qq build-essential wget >/dev/null 2>&1
+  SRC=/usr/local/src
+  mkdir -p "$SRC"
+  if wget -q "$PROFTPD_SRC_URL" -O "$SRC/proftpd-${PROFTPD_VERSION}.tar.gz" 2>>"$LOG"; then
+    ( cd "$SRC" && tar xzf "proftpd-${PROFTPD_VERSION}.tar.gz" ) 2>>"$LOG"
+    PDIR="$SRC/proftpd-${PROFTPD_VERSION}"
+    if [[ -d "$PDIR" ]]; then
+      # -fcommon / implicit-decl flags let this 2010-era code build on modern gcc
+      ( cd "$PDIR" \
+          && ./configure --prefix=/usr/local/proftpd CFLAGS="-fcommon -Wno-implicit-function-declaration" >>"$LOG" 2>&1 \
+          && make -j"$(nproc)" >>"$LOG" 2>&1 \
+          && make install >>"$LOG" 2>&1 )
+      if [[ -x /usr/local/proftpd/sbin/proftpd ]]; then
+        # minimal standalone config on port 21 with an 'ftpuser' login
+        id ftpuser >/dev/null 2>&1 || useradd -m -s /bin/bash ftpuser
+        echo 'ftpuser:ftp123' | chpasswd
+        cat >/usr/local/proftpd/etc/proftpd.conf <<'PFTP'
+ServerName "Lab FTP"
+ServerType standalone
+Port 21
+User nobody
+Group nogroup
+DefaultRoot ~
+<Limit LOGIN>
+  AllowAll
+</Limit>
+PFTP
+        cat >/etc/systemd/system/proftpd-lab.service <<'UNIT'
+[Unit]
+Description=Vulnerable lab ProFTPD 1.3.3c
+After=network.target
+[Service]
+Type=forking
+ExecStart=/usr/local/proftpd/sbin/proftpd -c /usr/local/proftpd/etc/proftpd.conf
+Restart=no
+[Install]
+WantedBy=multi-user.target
+UNIT
+        systemctl daemon-reload
+        systemctl enable --now proftpd-lab >/dev/null 2>&1 \
+          && ok "ProFTPD ${PROFTPD_VERSION} running on port 21 (login ftpuser/ftp123; nmap -sV shows the version)" \
+          || warn "ProFTPD built but the service failed to start; check $LOG"
+      else
+        warn "ProFTPD did not compile on this system; check $LOG (use --no-ftp to skip)"
+      fi
+    else
+      warn "could not unpack the ProFTPD source"
+    fi
+  else
+    warn "could not download ProFTPD source from $PROFTPD_SRC_URL (no internet? use --no-ftp to skip)"
+  fi
+elif [[ $INSTALL_FTP -eq 0 ]]; then
+  warn "--no-ftp: ProFTPD not built"
+else
+  warn "--no-apt: ProFTPD not built"
+fi
 
 #==============================================================================
 # 9) Firewall disabled
@@ -319,10 +434,10 @@ cat <<RES | tee -a "$LOG"
      2. Accounts: root/'$ROOT_PASS' and $DEMO_USER/'$DEMO_PASS' (weak)
      3. Passwords: no complexity, no faillock, MD5 hashing
      4. ASLR disabled
-     5. AppArmor disabled
+     5. AppArmor disabled + DVWA web app (unconfined; reads /etc/passwd via web flaw)
      6. /etc/shadow world-readable; SUID on find and /tmp/rootbash
      7. sudo: $DEMO_USER with NOPASSWD find, no log, no pty
-     8. Extra services: telnet (cleartext), avahi, cups
+     8. Extra services: telnet (cleartext), avahi, cups, ProFTPD $PROFTPD_VERSION (vulnerable)
      9. Firewall (ufw/iptables) disabled
     10. ip_forward and redirects enabled
     11. auditd and log forwarding disabled

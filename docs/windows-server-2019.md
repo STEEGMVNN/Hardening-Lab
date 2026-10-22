@@ -134,7 +134,9 @@ and because it's in a wordlist, offline cracking is instant.
 - ✅ **Re-test:** elevation now triggers a consent/secure-desktop prompt.
 
 ## 6. RDP active and NLA off
-- 🧪 **Seeded:** RDP enabled (`fDenyTSConnections=0`), `UserAuthentication=0` (NLA off).
+- 🧪 **Seeded:** RDP enabled (`fDenyTSConnections=0`), `TermService` started, `UserAuthentication=0`
+  (NLA off), and `trainee` added to the **Remote Desktop Users** group so it can actually sign in
+  over RDP (a normal user can't by default).
 - 🟠 **Exploit:**
   ```bash
   nmap -p3389 --script rdp-ntlm-info $HOST     # leaks hostname/domain/OS without authenticating
@@ -147,7 +149,10 @@ and because it's in a wordlist, offline cracking is instant.
 - ✅ **Re-test:** `rdp-ntlm-info` no longer leaks pre-auth; NLA forces authentication before a session.
 
 ## 7. Firewall disabled (all 3 profiles)
-- 🧪 **Seeded:** Domain/Private/Public profiles all set to `Enabled False`.
+- 🧪 **Seeded:** Domain/Private/Public profiles all set to `Enabled False`. SMB is built into Windows
+  Server (nothing is "installed"), but the script also **ensures the Server service (`LanmanServer`)
+  is running and the File-and-Printer-Sharing rules are on**, so port 445 is reachable and the
+  `nxc smb $HOST …` demos in rows 1–3 work reliably.
 - 🟠 **Exploit:** `nmap -sS -p- $HOST` → exposes 135/139/445 (SMB/RPC), 3389 (RDP), 5985 (WinRM), etc.
 - 🟢 **Harden:** `Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Block -LogBlocked True`.
 - ✅ **Re-test:** `nmap -sS -p- $HOST` now shows only explicitly allowed ports.

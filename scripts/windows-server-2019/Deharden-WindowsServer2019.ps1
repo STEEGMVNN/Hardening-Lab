@@ -160,7 +160,10 @@ Start-Service -Name TermService -ErrorAction SilentlyContinue
 # disable Network Level Authentication
 Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' 'UserAuthentication' 0
 Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
-OK "RDP active, NLA disabled (demo: nmap rdp-ntlm-info / hydra rdp)"
+# allow the low-priv demo user to actually sign in over RDP (otherwise only admins /
+# existing 'Remote Desktop Users' members can) -> makes the hydra/xfreerdp demo work
+Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $DemoUser -ErrorAction SilentlyContinue
+OK "RDP active, NLA disabled, '$DemoUser' added to Remote Desktop Users (demo: nmap rdp-ntlm-info / hydra rdp)"
 
 #==============================================================================
 # 7) Windows Defender Firewall disabled (all profiles)
@@ -168,6 +171,12 @@ OK "RDP active, NLA disabled (demo: nmap rdp-ntlm-info / hydra rdp)"
 Step "7) Firewall disabled"
 Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
 OK "firewall disabled on all 3 profiles (demo: nmap -p- finds every service)"
+# SMB is built into Windows Server (not "installed"), but make sure the Server service
+# and the File-and-Printer-Sharing rules are on so 'nxc smb HOST ...' can reach port 445.
+Set-Service -Name LanmanServer -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service -Name LanmanServer -ErrorAction SilentlyContinue
+Enable-NetFirewallRule -DisplayGroup 'File and Printer Sharing' -ErrorAction SilentlyContinue
+OK "SMB server (LanmanServer) ensured running and reachable on 445 (demo: nxc smb HOST ...)"
 
 #==============================================================================
 # 8) Advanced auditing disabled (no trace for the SOC)
@@ -228,8 +237,8 @@ Step "SUMMARY"
      3. Guest enabled, blank passwords allowed, '$DemoUser'/'$DemoPass'
      4. Logon: shows last user, no inactivity lock, no legal banner
      5. UAC disabled
-     6. RDP active and NLA off
-     7. Firewall disabled (3 profiles)
+     6. RDP active and NLA off ('$DemoUser' can sign in over RDP)
+     7. Firewall disabled (3 profiles); SMB server ensured reachable on 445
      8. Auditing disabled (no 4625/4688/4740)
      9. SMBv1 enabled, ScriptBlock logging off, autorun on
     10. Windows Update with no automatic updates

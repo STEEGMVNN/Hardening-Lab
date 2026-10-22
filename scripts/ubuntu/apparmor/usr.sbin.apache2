@@ -1,0 +1,66 @@
+# AppArmor profile for Apache — Hardening-Lab (AppArmor exercise, Ubuntu guide row 5)
+#
+# Purpose: confine Apache/PHP so that even a code-execution flaw in a web app (e.g. DVWA
+# command injection) CANNOT read sensitive files such as /etc/passwd and /etc/shadow,
+# even though Unix permissions (DAC) would otherwise allow it. This is the control the
+# dehardening script removes by disabling AppArmor.
+#
+# This is a STARTING POINT. Apache + PHP modules vary between Ubuntu releases, so you may
+# need to add a few paths for your setup (run `sudo aa-logprof` after testing and let it
+# add what the app legitimately needs). Deploy it with:
+#
+#   sudo cp usr.sbin.apache2 /etc/apparmor.d/usr.sbin.apache2
+#   sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.apache2
+#   sudo aa-enforce /etc/apparmor.d/usr.sbin.apache2
+#   sudo systemctl reload apache2
+#
+# Re-test: the DVWA command-injection payload `cat /etc/passwd` now returns nothing /
+# "Permission denied" because the read is blocked by this profile.
+
+#include <tunables/global>
+
+/usr/sbin/apache2 flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/php>
+  #include <abstractions/openssl>
+
+  capability setuid,
+  capability setgid,
+  capability dac_override,
+  capability net_bind_service,
+  capability kill,
+
+  # Apache binary, modules and its own configuration
+  /usr/sbin/apache2 mr,
+  /usr/lib/apache2/modules/*.so mr,
+  /etc/apache2/** r,
+  /etc/mime.types r,
+  /etc/ssl/certs/** r,
+
+  # Web root (serve the app, read-only)
+  /var/www/ r,
+  /var/www/** r,
+
+  # Runtime, logs, PHP sessions and the MySQL socket the app legitimately needs
+  /run/apache2/** rwk,
+  /var/log/apache2/** w,
+  /var/lib/php/sessions/ rw,
+  /var/lib/php/sessions/** rw,
+  /run/mysqld/mysqld.sock rw,
+  /tmp/ rw,
+  /tmp/** rwk,
+  /dev/urandom r,
+
+  # --- The point of the exercise: deny the secrets even though DAC allows them ---
+  deny /etc/passwd r,
+  deny /etc/shadow r,
+  deny /etc/gshadow r,
+  deny /etc/group r,
+  deny /etc/sudoers r,
+  deny /etc/sudoers.d/** r,
+  deny /root/ r,
+  deny /root/** mrwklx,
+  deny /home/*/ r,
+  deny /home/** mrwklx,
+}

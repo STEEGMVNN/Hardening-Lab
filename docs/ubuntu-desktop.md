@@ -26,13 +26,14 @@ sudo reboot                        # so ASLR / AppArmor / services settle
 ```
 
 Flags: `-y` unattended · `--no-apt` skip all package installs · `--no-web` skip the DVWA web app
-(row 5) · `--no-ftp` skip building the ProFTPD server (row 8). DVWA and ProFTPD need internet and add
-a few minutes; use the flags on an offline or minimal VM.
+(row 5) · `--ftp` *also* build the optional vulnerable FTP server (row 8b — off by default, needs a
+source URL). DVWA needs internet and adds a few minutes; use `--no-apt`/`--no-web` on an offline or
+minimal VM.
 
 - **Backups:** `/root/deharden-backups-<date>/` · **Log:** `/var/log/deharden-lab.log`
 - **Demo accounts it creates:** `root / toor` and `trainee / 123456` — both are in `rockyou.txt`,
   so they are genuinely crackable, and their hashes are stored as **MD5 (`$1$…`)** on purpose.
-  It also creates `ftpuser / ftp123` for the FTP service (row 8).
+  (With `--ftp` it also creates `ftpuser / ftp123` for the FTP service.)
 
 ## Attacker box prerequisites
 
@@ -173,30 +174,43 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
 - 🟢 **Harden:** `apt purge -y telnetd`; `systemctl disable --now avahi-daemon cups`.
 - ✅ **Re-test:** `nmap -sV $IP` no longer shows 23/tcp; nothing listens on the removed services.
 
-## 8b. Outdated software: ProFTPD 1.3.3c (patch, don't just delete)
-- 🧪 **Seeded:** ProFTPD **1.3.3c** built from source and running on port 21 (login `ftpuser / ftp123`).
-  It's a 2010-era release with public exploits — the lesson is **patch management**, not deletion.
+## 8b. Outdated software: a vulnerable ProFTPD (optional — patch, don't just delete)
+This exercise teaches **patch management**: run an old FTP server, detect its version, find a public
+exploit, then fix it by **upgrading** (not deleting) so the service stays up but secured.
+
+> [!NOTE]
+> **This module is opt-in and needs you to supply the source.** Old ProFTPD releases aren't on GitHub
+> and the SourceForge/FTP mirrors block scripted downloads, so the script won't fetch them reliably.
+> Download a vulnerable release tarball once (e.g. `proftpd-1.3.3c.tar.gz`, or `1.3.3a` which is kept
+> on the Debian snapshot archive) onto the victim VM, then run:
+> ```bash
+> sudo PROFTPD_SRC_URL=file:///root/proftpd-1.3.3c.tar.gz ./deharden-ubuntu.sh -y --ftp
+> ```
+> The script compiles it (with modern-gcc compatibility flags) and runs it on port 21 as
+> `ftpuser / ftp123`.
+
+- 🧪 **Seeded (with `--ftp`):** the chosen ProFTPD version running on port 21.
 - 🟠 **Exploit:**
   ```bash
-  nmap -sV -p21 $IP                        # => 21/tcp open ftp  ProFTPD 1.3.3c
-  searchsploit proftpd 1.3.3               # => lists the public "ProFTPD 1.3.3c Backdoor" exploit
+  nmap -sV -p21 $IP            # => 21/tcp open ftp  ProFTPD <version>
+  searchsploit proftpd 1.3.3   # => public exploits for that line
   ```
-  The famous remote-root here is the **backdoor** (`HELP ACIDBITCHEZ`), used via
-  `msfconsole → use exploit/unix/ftp/proftpd_133c_backdoor`.
-  > ⚠️ That backdoor only existed in the **trojaned** 1.3.3c tarball distributed in late 2010. The
-  > default build uses the clean official source (so Metasploit will report the target as not
-  > exploitable). To reproduce the live RCE, re-run the script with
-  > `PROFTPD_SRC_URL=<url-to-backdoored-source> sudo ./deharden-ubuntu.sh`. Either way, the
-  > version-detection + patch loop below works and is the real takeaway.
-- 🟢 **Harden — update instead of removing:** replace the vulnerable build with the distro's current,
-  patched ProFTPD:
+  Which exploit applies depends on the version you deploy, for example:
+  - **1.3.3a / 1.3.3b** → CVE-2010-4221 (Telnet IAC overflow), Metasploit
+    `exploit/unix/ftp/proftpd_telnet_iac` — a real pre-auth RCE (ASLR is already off in row 4, which
+    helps it land).
+  - **1.3.3c (trojaned tarball)** → the `HELP ACIDBITCHEZ` backdoor,
+    `exploit/unix/ftp/proftpd_133c_backdoor`. Only the compromised 2010 tarball is vulnerable; a clean
+    1.3.3c build is not.
+- 🟢 **Harden — update instead of removing:** replace the old build with the distro's current, patched
+  ProFTPD so the service keeps working:
   ```bash
   sudo systemctl disable --now proftpd-lab
   sudo apt-get install -y proftpd-core      # current, patched version from the repo
   sudo systemctl enable --now proftpd
   ```
-- ✅ **Re-test:** `nmap -sV -p21 $IP` now reports a **current** ProFTPD version, and the 1.3.3c
-  exploit no longer applies — the service stays available, but patched.
+- ✅ **Re-test:** `nmap -sV -p21 $IP` now reports a **current** ProFTPD, and the old exploit no longer
+  applies — available, but patched.
 
 ## 9. Firewall disabled
 - 🧪 **Seeded:** `ufw` disabled; `iptables` policies set to ACCEPT and flushed.

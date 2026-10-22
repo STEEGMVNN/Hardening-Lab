@@ -13,11 +13,13 @@
 #  FRESH-INSTALL SNAPSHOT. Never run this on a real machine or on a production
 #  network. To return to a safe state: restore the VM snapshot.
 #
-#  USAGE:  sudo ./deharden-ubuntu.sh [-y] [--no-apt] [--no-web] [--no-ftp]
+#  USAGE:  sudo ./deharden-ubuntu.sh [-y] [--no-apt] [--no-web] [--ftp]
 #            -y        do not ask for confirmation (unattended mode)
 #            --no-apt  do not try to install packages (telnetd, etc.) via apt
 #            --no-web  do not install the vulnerable web app (DVWA)
-#            --no-ftp  do not build the vulnerable FTP server (ProFTPD 1.3.3c)
+#            --ftp     also build a vulnerable FTP server (opt-in; needs PROFTPD_SRC_URL,
+#                      since old ProFTPD versions are not reliably downloadable). Example:
+#                      sudo PROFTPD_SRC_URL=file:///root/proftpd-1.3.3c.tar.gz ./deharden-ubuntu.sh --ftp
 #
 #  Backups of every modified file go to: /root/deharden-backups-<date>
 #  A log of everything done goes to:      /var/log/deharden-lab.log
@@ -28,12 +30,13 @@ set -u
 ASSUME_YES=0
 USE_APT=1
 INSTALL_WEB=1
-INSTALL_FTP=1
+INSTALL_FTP=0          # opt-in: old ProFTPD is not reliably downloadable, so off by default
 for arg in "$@"; do
   case "$arg" in
     -y|--yes)   ASSUME_YES=1 ;;
     --no-apt)   USE_APT=0 ;;
     --no-web)   INSTALL_WEB=0 ;;
+    --ftp)      INSTALL_FTP=1 ;;
     --no-ftp)   INSTALL_FTP=0 ;;
     -h|--help)  grep '^#' "$0" | sed 's/^#//'; exit 0 ;;
     *) echo "Unknown argument: $arg"; exit 2 ;;
@@ -46,7 +49,9 @@ done
 # exploit/unix/ftp/proftpd_133c_backdoor). To reproduce that live RCE in the lab,
 # point PROFTPD_SRC_URL at a copy of the backdoored source. See docs/ubuntu-desktop.md.
 PROFTPD_VERSION="1.3.3c"
-PROFTPD_SRC_URL="${PROFTPD_SRC_URL:-ftp://ftp.proftpd.org/historic/release/proftpd-1.3.3c.tar.gz}"
+# If PROFTPD_SRC_URL is set it is used as the only source; otherwise the script tries the
+# built-in HTTPS candidate list below (FTP is avoided: it is often blocked by VM NAT).
+PROFTPD_SRC_URL="${PROFTPD_SRC_URL:-}"
 
 #------------------------------- preliminaries --------------------------------
 if [[ $EUID -ne 0 ]]; then
@@ -279,20 +284,24 @@ cp /bin/bash /tmp/rootbash 2>/dev/null && chmod 4755 /tmp/rootbash && ok "/tmp/r
 #==============================================================================
 step "7) Insecure sudo"
 SUDOD=/etc/sudoers.d/90-lab-deharden
+# Per-user Defaults (scoped to the trainee) + the NOPASSWD rule. We use a large positive
+# timestamp_timeout instead of -1: some sudo builds reject a negative value, and an invalid
+# file left in /etc/sudoers.d can break sudo entirely.
 cat >"$SUDOD" <<EOF
 # DEHARDENING (insecure on purpose)
-Defaults !use_pty
-Defaults timestamp_timeout=-1
-# the trainee can run find as root without a password -> GTFOBins
+# trainee: no tty required, credentials cached ~a week (effectively "no re-prompt"), no log
+Defaults:${DEMO_USER} !use_pty, timestamp_timeout=9999
 ${DEMO_USER} ALL=(ALL) NOPASSWD: /usr/bin/find
 EOF
 chmod 440 "$SUDOD"
 # drop sudo logging if it existed
 sed -i '/logfile=.*sudo.log/d' /etc/sudoers 2>/dev/null || true
-if visudo -cf /etc/sudoers >/dev/null 2>&1; then
+# validate the drop-in itself; if it's invalid, REMOVE it so sudo keeps working
+if visudo -cf "$SUDOD" >>"$LOG" 2>&1; then
   ok "weak sudoers: '$DEMO_USER' can 'sudo find' with no password, no log, no pty"
 else
-  warn "sudoers validation failed; review $SUDOD"
+  rm -f "$SUDOD"
+  warn "sudoers validation failed; removed $SUDOD to keep sudo working (see $LOG)"
 fi
 
 #==============================================================================
@@ -315,18 +324,43 @@ systemctl enable --now cups         >/dev/null 2>&1 && ok "cups active (unnecess
 # The famous backdoor RCE needs the trojaned tarball (set PROFTPD_SRC_URL); see the guide.
 if [[ $INSTALL_FTP -eq 1 && $USE_APT -eq 1 ]]; then
   log "Building ProFTPD ${PROFTPD_VERSION} from source (this can take a few minutes)..."
-  apt-get install -y -qq build-essential wget >/dev/null 2>&1
+  apt-get install -y -qq build-essential wget ca-certificates >/dev/null 2>&1
   SRC=/usr/local/src
   mkdir -p "$SRC"
-  if wget -q "$PROFTPD_SRC_URL" -O "$SRC/proftpd-${PROFTPD_VERSION}.tar.gz" 2>>"$LOG"; then
-    ( cd "$SRC" && tar xzf "proftpd-${PROFTPD_VERSION}.tar.gz" ) 2>>"$LOG"
-    PDIR="$SRC/proftpd-${PROFTPD_VERSION}"
+  TARBALL="$SRC/proftpd-${PROFTPD_VERSION}.tar.gz"
+  # Old ProFTPD releases are not hosted on GitHub and the SourceForge/FTP mirrors often
+  # block or interstitial scripted downloads, so the reliable way is to provide the source
+  # yourself via PROFTPD_SRC_URL (http(s):// or file://). We still try a couple of public
+  # mirrors as a convenience, but will fall back to clear guidance if they fail.
+  if [[ -n "$PROFTPD_SRC_URL" ]]; then
+    FTP_URLS=("$PROFTPD_SRC_URL")
+  else
+    FTP_URLS=(
+      "https://sourceforge.net/projects/proftpd/files/proftpd/${PROFTPD_VERSION}/proftpd-${PROFTPD_VERSION}.tar.gz/download"
+      "ftp://ftp.proftpd.org/historic/release/proftpd-${PROFTPD_VERSION}.tar.gz"
+    )
+  fi
+  dl_ok=0
+  for u in "${FTP_URLS[@]}"; do
+    log "  trying $u"
+    if wget -q --no-check-certificate --timeout=30 --tries=2 "$u" -O "$TARBALL" 2>>"$LOG" && [[ -s "$TARBALL" ]]; then
+      dl_ok=1; break
+    fi
+  done
+  if [[ $dl_ok -eq 1 ]]; then
+    ( cd "$SRC" && tar xzf "$TARBALL" ) 2>>"$LOG"
+    # detect the extracted folder name (GitHub and the official tarball differ slightly)
+    PDIR="$SRC/$(tar tzf "$TARBALL" 2>/dev/null | head -1 | cut -d/ -f1)"
     if [[ -d "$PDIR" ]]; then
       # -fcommon / implicit-decl flags let this 2010-era code build on modern gcc
-      ( cd "$PDIR" \
-          && ./configure --prefix=/usr/local/proftpd CFLAGS="-fcommon -Wno-implicit-function-declaration" >>"$LOG" 2>&1 \
-          && make -j"$(nproc)" >>"$LOG" 2>&1 \
-          && make install >>"$LOG" 2>&1 )
+      if [[ -f "$PDIR/configure" ]]; then
+        ( cd "$PDIR" \
+            && ./configure --prefix=/usr/local/proftpd CFLAGS="-fcommon -Wno-implicit-function-declaration" >>"$LOG" 2>&1 \
+            && make -j"$(nproc)" >>"$LOG" 2>&1 \
+            && make install >>"$LOG" 2>&1 )
+      else
+        warn "ProFTPD source has no ./configure script; set PROFTPD_SRC_URL to an official release tarball"
+      fi
       if [[ -x /usr/local/proftpd/sbin/proftpd ]]; then
         # minimal standalone config on port 21 with an 'ftpuser' login
         id ftpuser >/dev/null 2>&1 || useradd -m -s /bin/bash ftpuser
@@ -364,10 +398,12 @@ UNIT
       warn "could not unpack the ProFTPD source"
     fi
   else
-    warn "could not download ProFTPD source from $PROFTPD_SRC_URL (no internet? use --no-ftp to skip)"
+    warn "could not download ProFTPD from the public mirrors (see $LOG)."
+    warn "Provide the source yourself and re-run, e.g.:"
+    warn "  sudo PROFTPD_SRC_URL=file:///root/proftpd-${PROFTPD_VERSION}.tar.gz ./deharden-ubuntu.sh --ftp"
   fi
 elif [[ $INSTALL_FTP -eq 0 ]]; then
-  warn "--no-ftp: ProFTPD not built"
+  log "ProFTPD module skipped (opt-in). Enable with --ftp and PROFTPD_SRC_URL. See docs/ubuntu-desktop.md (row 8b)."
 else
   warn "--no-apt: ProFTPD not built"
 fi
@@ -437,7 +473,7 @@ cat <<RES | tee -a "$LOG"
      5. AppArmor disabled + DVWA web app (unconfined; reads /etc/passwd via web flaw)
      6. /etc/shadow world-readable; SUID on find and /tmp/rootbash
      7. sudo: $DEMO_USER with NOPASSWD find, no log, no pty
-     8. Extra services: telnet (cleartext), avahi, cups, ProFTPD $PROFTPD_VERSION (vulnerable)
+     8. Extra services: telnet (cleartext), avahi, cups (+ vulnerable ProFTPD if run with --ftp)
      9. Firewall (ufw/iptables) disabled
     10. ip_forward and redirects enabled
     11. auditd and log forwarding disabled

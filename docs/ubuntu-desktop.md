@@ -115,20 +115,22 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
 - 🟢 **Harden:** `sysctl -w kernel.randomize_va_space=2` and persist it in `/etc/sysctl.conf`.
 - ✅ **Re-test:** the loop above now prints a **different** libc base each run.
 
-## 5. AppArmor disabled → exploit an unconfined web app (DVWA) to read `/etc/passwd`
+## 5. AppArmor disabled → exploit an unconfined web app (DVWA) to read `/etc/shadow`
 - 🧪 **Seeded:** the `apparmor` service is stopped/disabled (profiles in `complain`), **and** DVWA
   (Damn Vulnerable Web Application) is installed at `http://<IP>/dvwa`, served by Apache/PHP with **no
   AppArmor confinement**. Because nothing confines the web process, a web flaw can read any file the
-  Apache user can — including `/etc/passwd` (and `/etc/shadow`, made world-readable in row 6).
+  Apache user can — including **`/etc/shadow`** (made world-readable in row 6), `/etc/sudoers` and SSH
+  keys under `/home`.
 - 🟠 **Exploit:**
   1. Browse to `http://<IP>/dvwa`, log in as `admin / password`, click *Create / Reset Database*, then
      set *DVWA Security* to **Low**.
   2. Open the **Command Injection** page. The field runs `ping <input>`; chain a second command:
      ```
-     127.0.0.1; cat /etc/passwd
+     127.0.0.1; cat /etc/shadow
      ```
-     → the full `/etc/passwd` is returned in the page. Try `; cat /etc/shadow` too (readable thanks to
-     row 6). The **File Inclusion** page shows the same impact via `?page=/etc/passwd`.
+     → the full `/etc/shadow`, **password hashes and all**, is returned in the page (readable thanks to
+     row 6). `; cat /etc/passwd` works too, but that file is world-readable by design — the serious leak
+     is `/etc/shadow`. The **File Inclusion** page shows the same impact via `?page=/etc/shadow`.
   3. First confirm nothing is confined: `sudo aa-status` → *"0 profiles are in enforce mode"*.
 - 🟢 **Harden:** turn AppArmor back on and confine Apache so the web process can't read secrets even
   though Unix permissions allow it:
@@ -148,9 +150,11 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
   > The shipped profile ([`scripts/ubuntu/apparmor/usr.sbin.apache2`](../scripts/ubuntu/apparmor/usr.sbin.apache2))
   > is a starting point — Apache/PHP paths vary by Ubuntu release. If a legitimate page breaks under
   > enforce, run `sudo aa-logprof` and let it add what the app really needs.
-- ✅ **Re-test:** repeat the `127.0.0.1; cat /etc/passwd` injection — it now returns nothing /
-  *Permission denied*, because AppArmor (MAC) denies the read; `sudo aa-status` lists Apache in
-  **enforce** mode. The web bug still exists, but its blast radius is contained.
+- ✅ **Re-test:** repeat the `127.0.0.1; cat /etc/shadow` injection — it now returns nothing /
+  *Permission denied*, because AppArmor (MAC) denies the read even though DAC allows it; `sudo aa-status`
+  lists Apache in **enforce** mode. (`cat /etc/passwd` still works, and that's intentional — Apache must
+  read it to resolve its `www-data` user, and it leaks no hashes. The valuable secret, `/etc/shadow`, is
+  blocked.) The web bug still exists, but its blast radius is contained.
 
 ## 6. `/etc/shadow` world-readable; SUID on `find` and `/usr/local/bin/rootbash`
 - 🧪 **Seeded:** `chmod 644 /etc/shadow`; SUID bit on `/usr/bin/find`; a SUID copy at `/usr/local/bin/rootbash`.

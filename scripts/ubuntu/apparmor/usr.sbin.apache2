@@ -1,9 +1,16 @@
 # AppArmor profile for Apache — Hardening-Lab (AppArmor exercise, Ubuntu guide row 5)
 #
 # Purpose: confine Apache/PHP so that even a code-execution flaw in a web app (e.g. DVWA
-# command injection) CANNOT read sensitive files such as /etc/passwd and /etc/shadow,
-# even though Unix permissions (DAC) would otherwise allow it. This is the control the
-# dehardening script removes by disabling AppArmor.
+# command injection) CANNOT read the real secrets — /etc/shadow, /etc/sudoers, SSH keys
+# under /home, /root — even though Unix permissions (DAC) would otherwise allow it (row 6
+# of the lab makes /etc/shadow world-readable). This is the control the dehardening script
+# removes by disabling AppArmor.
+#
+# Note on /etc/passwd: it is NOT denied here. It is world-readable by design (it only lists
+# usernames, no hashes) and Apache itself must read it at startup to resolve its `User
+# www-data` / `Group www-data` directives — denying it makes Apache fail with
+# "AH00543: apache2: bad user name www-data". The valuable target is /etc/shadow, which
+# this profile does block.
 #
 # This is a STARTING POINT. Apache + PHP modules vary between Ubuntu releases, so you may
 # need to add a few paths for your setup (run `sudo aa-logprof` after testing and let it
@@ -44,6 +51,13 @@
   /etc/mime.types r,
   /etc/ssl/certs/** r,
 
+  # Apache needs to resolve its User/Group (www-data) at startup via NSS. These are
+  # world-readable and leak no hashes, so we ALLOW them — denying /etc/passwd here makes
+  # Apache fail to start ("AH00543: bad user name www-data"). The real secret is /etc/shadow.
+  /etc/passwd r,
+  /etc/group r,
+  /etc/nsswitch.conf r,
+
   # Web root (serve the app, read-only)
   /var/www/ r,
   /var/www/** r,
@@ -59,10 +73,9 @@
   /dev/urandom r,
 
   # --- The point of the exercise: deny the secrets even though DAC allows them ---
-  deny /etc/passwd r,
+  # (/etc/passwd and /etc/group are intentionally NOT denied — see note above.)
   deny /etc/shadow r,
   deny /etc/gshadow r,
-  deny /etc/group r,
   deny /etc/sudoers r,
   deny /etc/sudoers.d/** r,
   deny /root/ r,

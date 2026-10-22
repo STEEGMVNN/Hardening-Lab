@@ -58,7 +58,7 @@ always explicit — and so you can actually *run* each exercise end to end:
 
 The scripts deliberately seed real, testable targets — weak accounts whose passwords are in common
 wordlists, world-readable hashes, SUID binaries, open/legacy services, a vulnerable web app
-(**DVWA**) you exploit to read `/etc/passwd`, and an optional outdated **ProFTPD** you patch instead
+(**DVWA**) you exploit to read `/etc/shadow`, and an optional outdated **ProFTPD** you patch instead
 of delete — so the exploit steps aren't hypothetical: they succeed on a freshly dehardened VM and stop
 succeeding once you harden it.
 

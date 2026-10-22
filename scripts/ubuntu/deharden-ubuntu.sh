@@ -43,12 +43,11 @@ for arg in "$@"; do
   esac
 done
 
-# ProFTPD source (configurable). The default is the official 1.3.3c release, which
-# nmap fingerprints as "ProFTPD 1.3.3c". The widely known *backdoor* RCE lived only
-# in the trojaned 1.3.3c tarball distributed in late 2010 (Metasploit module
-# exploit/unix/ftp/proftpd_133c_backdoor). To reproduce that live RCE in the lab,
-# point PROFTPD_SRC_URL at a copy of the backdoored source. See docs/ubuntu-desktop.md.
-PROFTPD_VERSION="1.3.3c"
+# Optional ProFTPD module (opt-in via --ftp). Old ProFTPD releases are not reliably
+# downloadable by script (not on GitHub; SourceForge/FTP block automated pulls), so the
+# operator supplies the source via PROFTPD_SRC_URL (http(s):// or file://). PROFTPD_VERSION
+# is only used to name files and pick the convenience mirror URLs. See docs/ubuntu-desktop.md.
+PROFTPD_VERSION="${PROFTPD_VERSION:-1.3.3c}"
 # If PROFTPD_SRC_URL is set it is used as the only source; otherwise the script tries the
 # built-in HTTPS candidate list below (FTP is avoided: it is often blocked by VM NAT).
 PROFTPD_SRC_URL="${PROFTPD_SRC_URL:-}"
@@ -141,9 +140,30 @@ Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes128-c
 KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
 MACs hmac-sha2-256,hmac-sha2-512,hmac-sha1,hmac-md5
 EOF
-  systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd >/dev/null 2>&1
-  systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1
-  ok "sshd_config weakened: root allowed, no retry limit, legacy crypto"
+  # Ubuntu includes /etc/ssh/sshd_config.d/*.conf BEFORE the rest of the main file, and the
+  # first value wins -- so a cloud/server drop-in like 50-cloud-init.conf with
+  # 'PasswordAuthentication no' would silently override what we just appended. Put the weak
+  # auth directives in a 00- drop-in so they take precedence over any other drop-in.
+  if [[ -d /etc/ssh/sshd_config.d ]]; then
+    cat >/etc/ssh/sshd_config.d/00-deharden.conf <<'EOF'
+# DEHARDENING (insecure on purpose) - sorts first, so it wins over other drop-ins
+PermitRootLogin yes
+PermitEmptyPasswords yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+MaxAuthTries 100
+EOF
+    chmod 644 /etc/ssh/sshd_config.d/00-deharden.conf
+  fi
+  # validate the config before restarting so we never leave sshd unable to start
+  SSHD_BIN="$(command -v sshd || echo /usr/sbin/sshd)"
+  if "$SSHD_BIN" -t 2>>"$LOG"; then
+    systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd >/dev/null 2>&1
+    systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1
+    ok "sshd_config weakened: root allowed, password auth on, no retry limit, legacy+modern crypto"
+  else
+    warn "sshd config test failed; NOT restarting sshd to avoid lockout (see $LOG). Review $SSHD"
+  fi
 else
   warn "$SSHD does not exist (openssh-server not installed)"
 fi
@@ -279,8 +299,10 @@ chmod 644 /etc/shadow && ok "/etc/shadow world-readable (hashes exposed to 'john
 if [[ -x /usr/bin/find ]]; then
   chmod u+s /usr/bin/find && ok "SUID added to /usr/bin/find (escalation via GTFOBins)"
 fi
-# SUID copy of bash in /tmp (second escalation vector)
-cp /bin/bash /tmp/rootbash 2>/dev/null && chmod 4755 /tmp/rootbash && ok "/tmp/rootbash SUID created (escalation: /tmp/rootbash -p)"
+# SUID copy of bash in a PERSISTENT path (second escalation vector). Not /tmp, which can be
+# wiped on reboot -- and this script recommends a reboot at the end.
+cp /bin/bash /usr/local/bin/rootbash 2>/dev/null && chmod 4755 /usr/local/bin/rootbash \
+  && ok "/usr/local/bin/rootbash SUID created (escalation: /usr/local/bin/rootbash -p)"
 
 #==============================================================================
 # 7) Insecure sudo: NOPASSWD, no log, no pty, infinite timeout
@@ -312,11 +334,17 @@ fi
 #==============================================================================
 step "8) Unnecessary / cleartext services and a vulnerable FTP server"
 if [[ $USE_APT -eq 1 ]]; then
-  apt-get install -y -qq telnetd inetutils-inetd >/dev/null 2>&1 \
-    && { systemctl enable --now inetutils-inetd >/dev/null 2>&1; ok "telnetd installed and active (cleartext credentials, demo with tcpdump/hydra)"; } \
-    || warn "could not install telnetd (no internet? use --no-apt to skip)"
+  # 'telnetd' on older Ubuntu, 'inetutils-telnetd' on newer -> try both
+  if apt-get install -y -qq inetutils-inetd telnetd >/dev/null 2>&1 \
+     || apt-get install -y -qq inetutils-inetd inetutils-telnetd >/dev/null 2>&1; then
+    systemctl enable --now inetutils-inetd >/dev/null 2>&1
+    systemctl restart inetutils-inetd >/dev/null 2>&1   # pick up the telnet inetd.conf line
+    ok "telnet server installed and active on 23 (cleartext credentials, demo with tcpdump/hydra)"
+  else
+    warn "could not install a telnet server (no internet? use --no-apt to skip)"
+  fi
 else
-  warn "--no-apt: telnetd not installed"
+  warn "--no-apt: telnet server not installed"
 fi
 systemctl enable --now avahi-daemon >/dev/null 2>&1 && ok "avahi-daemon active (unnecessary service)"
 systemctl enable --now cups         >/dev/null 2>&1 && ok "cups active (unnecessary service)"
@@ -474,7 +502,7 @@ cat <<RES | tee -a "$LOG"
      3. Passwords: no complexity, no faillock, MD5 hashing
      4. ASLR disabled
      5. AppArmor disabled + DVWA web app (unconfined; reads /etc/passwd via web flaw)
-     6. /etc/shadow world-readable; SUID on find and /tmp/rootbash
+     6. /etc/shadow world-readable; SUID on find and /usr/local/bin/rootbash
      7. sudo: $DEMO_USER with NOPASSWD find, no log, no pty
      8. Extra services: telnet (cleartext), avahi, cups (+ vulnerable ProFTPD if run with --ftp)
      9. Firewall (ufw/iptables) disabled

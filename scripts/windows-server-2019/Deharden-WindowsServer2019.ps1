@@ -260,6 +260,8 @@ try {
 }
 Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' 'DisableAntiSpyware' 1
 OK "DisableAntiSpyware=1 policy applied (full effect after reboot)"
+WarnMsg "To RE-ENABLE Defender later you must remove this policy, set WinDefend to Automatic and"
+WarnMsg "reboot BEFORE 'Set-MpPreference' (else it fails with 0x800106ba). See docs row 11."
 
 #==============================================================================
 # SUMMARY

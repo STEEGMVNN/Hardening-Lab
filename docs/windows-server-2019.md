@@ -207,15 +207,42 @@ and because it's in a wordlist, offline cracking is instant.
 - ✅ **Re-test:** Windows Update reports it is checking/installing again and the hotfix list grows.
 
 ## 11. Windows Defender disabled
-- 🧪 **Seeded:** real-time protection off (`DisableRealtimeMonitoring`), `DisableAntiSpyware=1` policy.
+- 🧪 **Seeded:** real-time protection off (`DisableRealtimeMonitoring`) **and the policy
+  `DisableAntiSpyware=1`**. That policy is the important part: it fully disables Defender *and stops
+  the `WinDefend` service from starting*, which is why re-enabling takes a few ordered steps.
 - 🟠 **Exploit:**
   ```powershell
   Get-MpComputerStatus | Select RealTimeProtectionEnabled   # => False
   ```
   Dropping a standard [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) on the
   server is **not** flagged — a real webshell or payload would land just as quietly.
-- 🟢 **Harden:** `Set-MpPreference -DisableRealtimeMonitoring $false` and turn Tamper Protection back on.
-- ✅ **Re-test:** the EICAR file is quarantined on write; `RealTimeProtectionEnabled` → `True`.
+- 🟢 **Harden — do it in this order (a plain `Set-MpPreference` first will fail, see below):**
+  ```powershell
+  # 1. Remove the policies that force Defender off
+  Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' `
+                      -Name DisableAntiSpyware -ErrorAction SilentlyContinue
+  Remove-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection' `
+              -Recurse -ErrorAction SilentlyContinue
+
+  # 2. Let the Defender service start automatically
+  Set-Service -Name WinDefend -StartupType Automatic -ErrorAction SilentlyContinue
+
+  # 3. REBOOT — the policy removal + service state only take effect after a restart
+  Restart-Computer
+  ```
+  ```powershell
+  # 4. After the reboot, re-enable protection (and turn Tamper Protection back on in the UI)
+  Set-MpPreference -DisableRealtimeMonitoring $false
+  Set-MpPreference -DisableIOAVProtection    $false
+  ```
+  > **Troubleshooting `Set-MpPreference ... 0x800106ba`.** This exact error means the `WinDefend`
+  > service can't start because the `DisableAntiSpyware` policy is still in place. You can't fix it by
+  > retrying `Set-MpPreference` — you must do steps 1–3 first (remove the policy, set the service to
+  > Automatic, **reboot**). After the reboot the service runs and step 4 succeeds. If the registry
+  > value keeps coming back, check `HKLM\SOFTWARE\Policies\Microsoft\Windows Defender` in `regedit` and
+  > delete `DisableAntiSpyware` by hand, then reboot.
+- ✅ **Re-test:** `Get-MpComputerStatus | Select RealTimeProtectionEnabled, AntivirusEnabled` → both
+  `True`; writing the EICAR test file is now quarantined on contact.
 
 ---
 

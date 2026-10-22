@@ -172,15 +172,17 @@ and because it's in a wordlist, offline cracking is instant.
 - ✅ **Re-test:** the same failed logon now produces a 4625 event with full detail.
 
 ## 9. SMBv1 enabled, ScriptBlock logging off, autorun on
-- 🧪 **Seeded:** SMBv1 feature enabled; PowerShell ScriptBlock logging off; autorun on.
+- 🧪 **Seeded:** the SMBv1 **server** protocol enabled (fast config + registry toggle, no DISM so it
+  can't stall on an offline VM); PowerShell ScriptBlock logging off; autorun on.
 - 🟠 **Exploit:**
   ```bash
   nmap --script smb-protocols -p445 $HOST           # => shows SMBv1 is offered
   nmap --script smb-vuln-ms17-010 -p445 $HOST       # detection; "not vulnerable" on patched 2019
   ```
   On a patched 2019 this is a **detection** exercise, not an RCE — see the note below.
-- 🟢 **Harden:** `Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol`;
-  `EnableScriptBlockLogging=1`; `NoDriveTypeAutoRun=255`.
+- 🟢 **Harden:** `Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force` (fast; optionally
+  `Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart` to remove the feature
+  too); set `EnableScriptBlockLogging=1`; `NoDriveTypeAutoRun=255`.
 - ✅ **Re-test:** `nmap --script smb-protocols` no longer lists SMBv1.
 
 ## 10. Windows Update with no automatic updates

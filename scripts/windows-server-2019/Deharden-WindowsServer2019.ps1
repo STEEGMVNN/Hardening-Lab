@@ -191,10 +191,14 @@ OK "all audit subcategories set to 'no auditing'; 4688 without command line"
 # 9) SMBv1 enabled, ScriptBlock logging off, autorun on
 #==============================================================================
 Step "9) SMBv1, ScriptBlock logging and autorun"
-# enable SMBv1 (legacy protocol; patched on 2019 -> treated as a detection demo with nmap)
-Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue | Out-Null
+# Enable the SMBv1 *server* protocol via the fast config + registry path only.
+# We deliberately AVOID 'Enable-WindowsOptionalFeature ... SMB1Protocol': on an isolated
+# VM (no internet) it makes DISM reach out to Windows Update for the feature payload and
+# can appear to hang for many minutes. Toggling the server protocol is instant and is
+# enough for nmap smb-protocols / smb-vuln-ms17-010 detection.
 Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force -ErrorAction SilentlyContinue
-OK "SMBv1 enabled (demo: nmap --script smb-vuln-ms17-010 -> detection; not RCE on patched 2019)"
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1' 1
+OK "SMBv1 server enabled (demo: nmap --script smb-protocols / smb-vuln-ms17-010 detection)"
 # disable PowerShell ScriptBlock logging
 Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' 'EnableScriptBlockLogging' 0
 OK "ScriptBlock logging disabled (obfuscated PowerShell goes unnoticed)"

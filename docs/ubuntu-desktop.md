@@ -135,11 +135,16 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
   ```bash
   systemctl enable --now apparmor
   sudo cp scripts/ubuntu/apparmor/usr.sbin.apache2 /etc/apparmor.d/usr.sbin.apache2
-  sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.apache2
-  sudo aa-enforce /etc/apparmor.d/usr.sbin.apache2
+  sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.apache2   # loads AND enforces it
   sudo systemctl reload apache2
-  sudo aa-enforce /etc/apparmor.d/*     # enforce the rest of the system profiles too
+  sudo aa-status | grep apache2                               # confirm it's in enforce mode
   ```
+  > **Why `apparmor_parser` and not `aa-enforce`?** `aa-enforce` is the Python front-end; it scans the
+  > whole `/etc/apparmor.d/` directory and on some Ubuntu builds crashes with
+  > `AppArmorBug: Empty filename given to ProfileList` even when *your* profile is fine. `apparmor_parser -r`
+  > loads the profile straight through the kernel parser, and since this profile has no `complain` flag it
+  > lands in **enforce** mode already — so `aa-enforce` is unnecessary here.
+  >
   > The shipped profile ([`scripts/ubuntu/apparmor/usr.sbin.apache2`](../scripts/ubuntu/apparmor/usr.sbin.apache2))
   > is a starting point — Apache/PHP paths vary by Ubuntu release. If a legitimate page breaks under
   > enforce, run `sudo aa-logprof` and let it add what the app really needs.

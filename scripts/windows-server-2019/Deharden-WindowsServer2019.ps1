@@ -119,13 +119,19 @@ if ($guest) { Enable-LocalUser -Name $guest.Name; OK "Guest account '$($guest.Na
 # allow blank-password accounts to be used over the network
 Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'LimitBlankPasswordUse' 0
 OK "LimitBlankPasswordUse = 0 (blank-password accounts usable over the network)"
-# low-privilege demo user with a weak password
+# low-privilege demo user with a weak password (idempotent: ALWAYS (re)set the
+# password so re-runs converge, instead of only on first creation).
+$sec = ConvertTo-SecureString $DemoPass -AsPlainText -Force
 if (-not (Get-LocalUser -Name $DemoUser -ErrorAction SilentlyContinue)) {
-    $sec = ConvertTo-SecureString $DemoPass -AsPlainText -Force
     New-LocalUser -Name $DemoUser -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
-    Add-LocalGroupMember -Group 'Users' -Member $DemoUser -ErrorAction SilentlyContinue
-    OK "user '$DemoUser' with weak password '$DemoPass'"
+    OK "user '$DemoUser' created"
+} else {
+    Set-LocalUser -Name $DemoUser -Password $sec -PasswordNeverExpires $true
+    OK "user '$DemoUser' already existed -> password reset to '$DemoPass'"
 }
+# add to the local Users group by SID (S-1-5-32-545) so it works on any OS language
+Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $DemoUser -ErrorAction SilentlyContinue
+OK "'$DemoUser' set with weak password '$DemoPass' and placed in the Users group"
 # local Administrator NOT renamed -> enumerable via RID 500 (left on purpose)
 OK "Administrator keeps its default name (enumerable via RID 500)"
 
@@ -161,9 +167,12 @@ Start-Service -Name TermService -ErrorAction SilentlyContinue
 Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' 'UserAuthentication' 0
 Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
 # allow the low-priv demo user to actually sign in over RDP (otherwise only admins /
-# existing 'Remote Desktop Users' members can) -> makes the hydra/xfreerdp demo work
-Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $DemoUser -ErrorAction SilentlyContinue
-OK "RDP active, NLA disabled, '$DemoUser' added to Remote Desktop Users (demo: nmap rdp-ntlm-info / hydra rdp)"
+# existing 'Remote Desktop Users' members can) -> makes the hydra/xfreerdp demo work.
+# Use the group SID (S-1-5-32-555) so it also works on non-English Windows, where the
+# group is named e.g. "Usuarios de escritorio remoto".
+Add-LocalGroupMember -SID 'S-1-5-32-555' -Member $DemoUser -ErrorAction SilentlyContinue
+$rdpGrp = (Get-LocalGroup -SID 'S-1-5-32-555' -ErrorAction SilentlyContinue).Name
+OK "RDP active, NLA disabled, '$DemoUser' added to '$rdpGrp' (demo: nmap rdp-ntlm-info / hydra rdp)"
 
 #==============================================================================
 # 7) Windows Defender Firewall disabled (all profiles)

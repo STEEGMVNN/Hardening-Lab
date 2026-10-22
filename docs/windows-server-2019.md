@@ -144,6 +144,10 @@ and because it's in a wordlist, offline cracking is instant.
   #  => login: trainee  password: Password1
   xfreerdp /u:trainee /p:Password1 /v:$HOST    # interactive session
   ```
+  > If `xfreerdp` is rejected: the script (re)sets `trainee`'s password to `Password1` and adds it to
+  > the *Remote Desktop Users* group by SID on every run, so make sure you're on the current script and
+  > typing the current password. On newer FreeRDP, add `/cert:ignore` (and `/sec:rdp` if NLA
+  > negotiation fails).
 - 🟢 **Harden:** if RDP isn't needed, `sc config TermService start= disabled`; otherwise re-enable NLA
   with `UserAuthentication=1`.
 - ✅ **Re-test:** `rdp-ntlm-info` no longer leaks pre-auth; NLA forces authentication before a session.

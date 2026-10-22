@@ -133,10 +133,13 @@ MaxAuthTries 100
 X11Forwarding yes
 AllowTcpForwarding yes
 LoginGraceTime 120
-# legacy / weak ciphers and KEX (downgrade demonstration)
-Ciphers aes128-cbc,3des-cbc,aes256-cbc
-KexAlgorithms diffie-hellman-group1-sha1,diffie-hellman-group14-sha1
-MACs hmac-md5,hmac-sha1
+# weak/legacy algorithms ADDED alongside the modern ones. nmap's ssh2-enum-algos still
+# flags the weak offer (the downgrade weakness), but keeping the modern algorithms means a
+# current OpenSSH client / hydra can still negotiate the handshake and run the brute-force
+# demo. Offering ONLY legacy algos makes modern clients refuse to connect at all.
+Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes128-ctr,aes128-cbc,3des-cbc,aes256-cbc
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
+MACs hmac-sha2-256,hmac-sha2-512,hmac-sha1,hmac-md5
 EOF
   systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd >/dev/null 2>&1
   systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1

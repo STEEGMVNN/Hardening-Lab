@@ -42,6 +42,7 @@ and you watch the consequence disappear. That's hardening you actually remember.
 | --- | --- | --- |
 | 🐧 **Ubuntu Desktop** (24.04 / 22.04) | [`scripts/ubuntu/deharden-ubuntu.sh`](scripts/ubuntu/deharden-ubuntu.sh) | [docs/ubuntu-desktop.md](docs/ubuntu-desktop.md) |
 | 🪟 **Windows Server 2019** | [`scripts/windows-server-2019/Deharden-WindowsServer2019.ps1`](scripts/windows-server-2019/Deharden-WindowsServer2019.ps1) | [docs/windows-server-2019.md](docs/windows-server-2019.md) |
+| 🪟 **Windows 11** (Pro / Enterprise) | [`scripts/windows-11/Deharden-Windows11.ps1`](scripts/windows-11/Deharden-Windows11.ps1) | [docs/windows-11.md](docs/windows-11.md) |
 
 > More systems may be added over time. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -77,6 +78,7 @@ Then follow the guide for your target system:
 
 - **Ubuntu Desktop** → [docs/ubuntu-desktop.md](docs/ubuntu-desktop.md)
 - **Windows Server 2019** → [docs/windows-server-2019.md](docs/windows-server-2019.md)
+- **Windows 11** → [docs/windows-11.md](docs/windows-11.md)
 
 First time setting up the VMs? Start with **[docs/lab-setup.md](docs/lab-setup.md)** — it covers the
 recommended topology (an attacker box plus the victim VMs), the Host-Only network, and snapshots.
@@ -91,14 +93,17 @@ Hardening-Lab/
 ├── docs/
 │   ├── lab-setup.md              ← build the isolated VM lab
 │   ├── ubuntu-desktop.md         ← run → exploit → harden (Linux)
-│   └── windows-server-2019.md    ← run → exploit → harden (Windows)
+│   ├── windows-server-2019.md    ← run → exploit → harden (Windows Server)
+│   └── windows-11.md             ← run → exploit → harden (Windows endpoint)
 └── scripts/
     ├── ubuntu/
     │   ├── deharden-ubuntu.sh
     │   └── apparmor/
     │       └── usr.sbin.apache2     ← sample profile for the AppArmor exercise
-    └── windows-server-2019/
-        └── Deharden-WindowsServer2019.ps1
+    ├── windows-server-2019/
+    │   └── Deharden-WindowsServer2019.ps1
+    └── windows-11/
+        └── Deharden-Windows11.ps1
 ```
 
 ## Who this is for

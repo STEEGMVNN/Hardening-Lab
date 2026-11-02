@@ -14,7 +14,8 @@ is that you can break things freely and roll back in seconds.
 | --- | --- | --- |
 | **Attacker** | Kali Linux (or any distro with `nmap`, `hydra`, `john`, `hashcat`, `netexec`) | Runs the "exploit" commands from each guide |
 | **Victim — Linux** | Ubuntu Desktop 24.04 / 22.04 | Target for [docs/ubuntu-desktop.md](ubuntu-desktop.md) |
-| **Victim — Windows** | Windows Server 2019 | Target for [docs/windows-server-2019.md](windows-server-2019.md) |
+| **Victim — Windows Server** | Windows Server 2019 | Target for [docs/windows-server-2019.md](windows-server-2019.md) |
+| **Victim — Windows endpoint** | Windows 11 (Pro / Enterprise) | Target for [docs/windows-11.md](windows-11.md) |
 
 You don't need all three at once. A single victim VM plus an attacker box is enough to work through
 one guide.
@@ -64,3 +65,4 @@ Ready? Pick a target:
 
 - 🐧 [Ubuntu Desktop guide](ubuntu-desktop.md)
 - 🪟 [Windows Server 2019 guide](windows-server-2019.md)
+- 🪟 [Windows 11 guide](windows-11.md)

